@@ -1,0 +1,31 @@
+# syntax=docker/dockerfile:1.7
+FROM python:3.11-slim-bookworm
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_DEFAULT_TIMEOUT=120 \
+    PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+
+WORKDIR /app
+
+RUN sed -i 's|http://deb.debian.org|https://mirrors.aliyun.com|g; s|http://security.debian.org|https://mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources
+
+RUN apt-get update && apt-get install -y \
+    curl \
+    libglib2.0-0 \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.api.txt ./
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.api.txt
+
+COPY app ./app
+COPY alembic ./alembic
+COPY alembic.ini ./
+COPY pyproject.toml ./
+COPY README.md ./
+
+EXPOSE 8000
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

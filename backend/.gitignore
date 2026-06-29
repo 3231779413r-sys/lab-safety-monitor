@@ -1,0 +1,28 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+.uv-cache
+
+# YOLO output directories (unused)
+runs/
+
+# Logs and local runtime artifacts
+*.log
+__pycache__/
+
+# Local service data that should not be packaged as code
+.postgres-data/
+minio-data/
+
+# Local lightweight DB files
+*.db
+
+# Optional duplicate root-level model cache
+yolov8m.pt

@@ -1,0 +1,88 @@
+# ==========================================
+# 1. React 前端忽略项
+# ==========================================
+node_modules/
+/build
+/.pnp
+.pnp.js
+
+# 测试与覆盖率
+/coverage
+
+# 各种本地日志
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ==========================================
+# 2. Python 后端与检测模型忽略项
+# ==========================================
+# 字节码与缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# 虚拟环境
+venv/
+.venv/
+env/
+ENV/
+
+# 检测模型权重与大型数据（核心防护！防止爆仓库）
+*.pth
+*.pt
+*.pkl
+*.onnx
+*.pb
+*.h5
+checkpoint/
+checkpoints/
+
+# 目标检测/深度学习常用的数据集文件夹（如果是你在本地放的数据集，请取消注释或手动添加目录名）
+# dataset/
+# data/
+
+# 训练日志与可视化
+runs/
+.tensorboard/
+*.log
+
+# ==========================================
+# 3. 系统与本地配置文件（涉及隐私和本地环境）
+# ==========================================
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# IDE (编辑器) 配置文件
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+
+# 操作系统临时文件
+.DS_Store
+Thumbs.db
+# 过滤测试产生的临时截帧文件夹
+1200ms/
+600ms/
+shared-frames/
+
+# 过滤数据和备份
+data/
+backup/
+
+# (可选) 如果你不想把海康整个几百MB的SDK包装进Git历史
+# HCNetSDKV6.1.11.5_build20251204_linux64_ZH/
+# 拦截 MinIO 二进制大文件
+backend/tools/minio
+
+# 拦截模型压缩包
+*.zip

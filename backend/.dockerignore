@@ -1,0 +1,14 @@
+.git
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+.venv
+weights
+runs
+minio-data
+marketwise.db
+sentinelvision.db
+tools
+scripts
+=*

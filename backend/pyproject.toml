@@ -1,0 +1,85 @@
+[project]
+name = "backend"
+version = "0.1.0"
+description = "Lab Safety Monitoring System Backend"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "alembic>=1.14.0",
+    "aio-pika>=9.5.5",
+    "asyncpg>=0.30.0",
+    "bcrypt>=4.0.1",
+    "dill>=0.4.1",
+    "fastapi>=0.128.0",
+    "filterpy>=1.4.5",
+    "onnxruntime-gpu>=1.20.1",
+    "opencv-python>=4.12.0.88",
+    "Pillow>=11.0.0",
+    "pipreqs>=0.5.0",
+    "pydantic-settings>=2.7.0",
+    "pydantic>=2.10.0",
+    "email-validator>=2.2.0",
+    "faiss-cpu>=1.14.0",
+    "gdown>=6.1.0",
+    "python-multipart>=0.0.21",
+    "scipy>=1.13.0",
+    "sqlalchemy>=2.0.36",
+    # PyTorch with CUDA 12.8 support (versions must match)
+    # torch 2.8.0 + torchvision 0.23.0 + torchaudio 2.8.0 are compatible
+    "torch==2.8.0",
+    "torchreid>=0.2.5",
+    "torchaudio==2.8.0",
+    "torchvision==0.23.0",
+    "uvicorn[standard]>=0.32.0",
+    "websockets>=13.0",
+    "wsproto>=1.2.0",
+    "requests>=2.32.0",  # For manual model downloads
+    "tqdm>=4.66.0",  # Progress bars for downloads
+    # ML Models
+    "lap>=0.5.12",
+    "ultralytics>=8.3.0",  # YOLOv8
+    "insightface>=0.7.3",  # Face recognition
+    "huggingface-hub>=0.26.0",
+    "transformers>=4.47.0",  # SAM3 support may require 4.57.0+ (check Hugging Face docs)
+    "accelerate>=1.12.0",
+    "modelscope>=1.18.0",  # For downloading SAM3 model
+    "sam3>=0.1.2",
+    "hf-xet>=1.2.0",
+    "minio>=7.2.12",
+    # Authentication
+    "python-jose[cryptography]>=3.3.0",
+]
+
+[project.optional-dependencies]
+sam2 = [
+    # SAM 2 from GitHub (installed via uv sync --extra sam2)
+    # Note: Package name in repo is 'sam-2' (with hyphen)
+    "sam-2 @ git+https://github.com/facebookresearch/sam2.git",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["app", "app.*"]
+
+# PyTorch CUDA configuration (CUDA 12.8)
+# This ensures torch, torchvision, and torchaudio are installed from PyTorch's CUDA wheel repository
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+# Use CUDA 12.8 builds on Linux/Windows (fallback to CPU on Mac)
+# Platform markers ensure correct wheels are selected
+torch = { index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" }
+torchvision = { index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" }
+torchaudio = { index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" }
+
+# Alternative: If specific versions are needed, you can also try:
+# torch = ">=2.5.1,<2.10"  # Let uv find a compatible CUDA 12.8 version

@@ -1,0 +1,82 @@
+# Lab Safety Monitor - Conda Environment
+# 使用方法: conda env create -f environment.yml
+
+name: lab-safety
+channels:
+  - conda-forge
+  - pytorch
+  - nvidia
+  - defaults
+
+dependencies:
+  # Python
+  - python=3.11
+  - pip
+
+  # 系统库
+  - cudnn>=9.0
+  - cuda-toolkit>=12.1
+
+  # 基础科学计算
+  - numpy
+  - scipy
+  - pillow
+  - matplotlib
+
+  # 数据库
+  - sqlite
+
+  - pip:
+      # PyTorch with CUDA 12.8 (RTX 4090/5090 等新显卡)
+      - torch==2.8.0
+      - torchvision==0.23.0
+      - torchaudio==2.8.0
+      - --index-url https://download.pytorch.org/whl/cu128
+
+      # Web 框架
+      - fastapi>=0.128
+      - uvicorn[standard]>=0.32
+      - starlette>=0.40
+      - python-multipart>=0.0.21
+
+      # 数据库
+      - sqlalchemy>=2.0.36
+      - asyncpg>=0.30
+      - alembic
+      - aiosqlite>=0.20
+
+      # 计算机视觉
+      - opencv-python>=4.12
+      - opencv-contrib-python>=4.12
+      - ultralytics>=8.3
+      - --extra-index-url https://download.pytorch.org/whl/cu128
+
+      # ML 模型
+      - transformers>=4.47
+      - accelerate>=1.12
+      - modelscope>=1.18
+      - sam3>=0.1.2
+      - insightface>=0.7.3
+      - onnxruntime-gpu>=1.20
+      - huggingface-hub>=0.26
+
+      # 时序滤波
+      - filterpy>=1.4.5
+      - scipy>=1.13
+
+      # 数据验证
+      - pydantic>=2.10
+      - pydantic-settings>=2.7
+
+      # 网络请求
+      - requests>=2.32
+      - httpx>=0.27
+      - aiohttp>=3.9
+      - websockets>=13.0
+      - wsproto>=1.2
+
+      # 其他工具
+      - tqdm>=4.66
+      - filterpy>=1.4.5
+      - python-dotenv>=1.0
+      - python-dateutil>=2.8

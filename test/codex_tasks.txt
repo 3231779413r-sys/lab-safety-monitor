@@ -1,0 +1,317 @@
+Codex 修改任务清单
+====================
+
+更新时间：2026-06-24
+
+目标
+----
+确保多相机场景下“始终处理最新帧、稳定低延迟、可观测”，而不是当前这种经常回压跳帧、身份链路拖慢、热点相机抖动降级的状态。
+
+工作要求
+--------
+1. 先审阅并理解以下关键文件，再开始改：
+- `backend/app/services/camera_runtime.py`
+- `backend/app/services/inference_broker.py`
+- `backend/app/services/identity_broker.py`
+- `backend/app/inference_batch_worker.py`
+- `backend/app/identity_batch_worker.py`
+- `backend/app/ml/pipeline.py`
+- `.env.docker`
+- `docker-compose.yml`
+
+2. 修改时遵守这些原则：
+- 优先修根因，不要做表面 patch
+- 不要破坏现有 API/前端接口
+- 保持现有日志风格
+- 所有改动尽量局部、可回滚
+- 改完后给出验证步骤和建议配置
+- 如果需要新增配置项，请同时更新 `backend/app/core/config.py`、`.env.docker`、`docker-compose.yml`
+
+3. 重点问题背景（需要针对性修复）：
+- 当前每相机待推理帧上限过低，`INFERENCE_MAX_PENDING_FRAMES_PER_CAMERA=1`，导致大量 `Skipping inference sample...`
+- 当前回压策略是“拒绝新帧”，不是“保留最新帧覆盖旧帧”
+- inference/identity 总时延高，主要瓶颈是排队等待，不是纯模型计算
+- identity 链路会重新编码整帧 JPEG，增加 CPU 和等待
+- batch worker 当前会混合多摄像头帧，热点相机会拖累普通相机
+- 自动 degrade level 在 0/1/2 之间频繁抖动
+- broker 发布接口当前没有可靠等待 publish 成功，存在 silent failure 风险
+- 需要增强实时性指标，证明系统真的在“处理最新帧”
+
+P0：必须先完成
+================
+
+任务 P0-1：把每相机推理提交队列改成 latest-frame mailbox 语义
+目标：
+- 不再使用“backlog 满了就直接跳过新帧”的策略
+- 每个相机始终只保留最新待处理帧；如果旧帧还没发出/还没被处理，可以被新帧覆盖
+- 必须记录：
+  - 被覆盖旧帧次数
+  - 因最新帧替换产生的丢弃次数
+  - 每相机有效处理 FPS
+  - 最新已处理帧年龄 `latest_frame_age_ms`
+
+重点修改位置：
+- `backend/app/services/camera_runtime.py`
+
+具体要求：
+- 重构当前 inference submit / pending 逻辑
+- 保持“低延迟优先”，不要改成无限堆积
+- 如果相机高压，只允许旧帧被更新覆盖，不允许 backlog 无限制增长
+- 日志中明确区分：
+  - `replaced_pending_oldest`
+  - `replaced_pending_latest`
+  - `submit_queue_full`
+  - `processing_dropped`
+- 最终目标是：系统处理“最新状态”，而不是执着于处理所有历史帧
+
+任务 P0-2：修复 RabbitMQ publish 成功语义
+目标：
+- `publish_frame()` / `publish_identity_task()` 不能在 coroutine 还没确认执行时就直接返回成功
+- 必须等待 `run_coroutine_threadsafe(...).result(timeout=...)`
+- publish 超时或异常时：
+  - 返回 false
+  - 打日志
+  - 在 runtime 中正确释放共享帧/更新 telemetry
+  - 不允许 silent drop
+
+重点修改位置：
+- `backend/app/services/inference_broker.py`
+- `backend/app/services/identity_broker.py`
+- `backend/app/services/camera_runtime.py`
+
+任务 P0-3：identity 链路改成增量优先
+目标：
+- 只对以下目标做 identity：
+  - 新 track
+  - unknown track
+  - face cache 过期的已识别 track
+- 优先传 crop 或更轻量载荷，不要默认重新编码整帧
+- 如果短时间内 identity 跟不上，主检测结果必须先落地，identity 异步回填即可
+
+重点修改位置：
+- `backend/app/services/camera_runtime.py`
+- `backend/app/identity_batch_worker.py`
+- 如有必要，调整相关 payload 构造文件
+
+具体要求：
+- 尽量减少整帧 JPEG 二次编码
+- 如果必须保留整帧 fallback，也要优先 crop
+- 增加 identity 实时指标：
+  - `identity_requests_submitted`
+  - `identity_requests_skipped`
+  - `identity_async_merged_count`
+  - `identity_fallback_without_enrichment_count`
+
+P1：性能与稳定性增强
+====================
+
+任务 P1-1：优化 inference batch 策略
+目标：
+- 避免热点相机或高复杂度帧拖慢整批
+- 至少实现以下任一方案，并在说明中写清：
+  - 按复杂度分桶（空帧/低复杂度/高复杂度）
+  - 按相机隔离小批次
+  - 限制单 batch 内高复杂度帧占比
+
+重点修改位置：
+- `backend/app/inference_batch_worker.py`
+
+具体要求：
+- 保留动态 batch 能力
+- 避免为了吞吐把低延迟牺牲掉
+- 输出新的批处理统计：
+  - batch 内相机数
+  - batch 内复杂帧数
+  - batch compute / wait 分布
+  - 每类 bucket 的处理量
+
+任务 P1-2：平滑 degrade 状态机
+目标：
+- 减少 0/1/2 频繁抖动
+- 让 degrade 更稳定、更符合热点相机长期策略
+- 支持对指定相机固定 profile（如 fast / balanced / accurate）
+
+重点修改位置：
+- `backend/app/services/camera_runtime.py`
+- `backend/app/core/config.py`
+- `.env.docker`
+- `docker-compose.yml`
+
+具体要求：
+- 给 degrade 增加更明确的进入/恢复门限与保持时间
+- 把热点相机推荐和实际 profile 使用情况纳入 summary
+- 对高压相机优先固定成 `fast`，而不是每几秒震荡
+
+任务 P1-3：增强运行时可观测性
+目标：
+- 证明系统是否真的“实时”
+- 日志和 summary 至少新增以下字段：
+  - `effective_processed_fps`
+  - `latest_frame_age_ms`
+  - `replaced_pending_count`
+  - `submit_queue_reject_count`
+  - `identity_skip_ratio`
+  - `async_identity_merge_latency_ms`
+  - `camera_hotness_score`
+
+重点修改位置：
+- `backend/app/services/camera_runtime.py`
+
+P2：配置和容量建议
+==================
+
+任务 P2-1：补齐配置项
+目标：
+- 为新行为增加合理配置项，并提供默认值
+- 更新：
+  - `backend/app/core/config.py`
+  - `.env.docker`
+  - `docker-compose.yml`
+
+建议新增或重命名的配置（如认为合理可微调名称）：
+- `CAMERA_RUNTIME_LATEST_ONLY_MODE`
+- `CAMERA_RUNTIME_MAX_MAILBOX_FRAMES`
+- `BROKER_PUBLISH_TIMEOUT_SECONDS`
+- `IDENTITY_USE_PERSON_CROPS_FIRST`
+- `IDENTITY_MAX_CROPS_PER_FRAME`
+- `CAMERA_DEGRADE_ENTER_HOLD_SECONDS`
+- `CAMERA_DEGRADE_RECOVER_HOLD_SECONDS`
+- `CAMERA_RUNTIME_HOT_CAMERA_SCORE_THRESHOLD`
+
+任务 P2-2：输出部署调优建议
+目标：
+- 根据当前代码和日志特征，给出推荐值，不要只改代码不说明
+- 至少覆盖：
+  - `CAMERA_MONITOR_SHARD_COUNT`
+  - `CAMERA_RUNTIME_SHARED_SUBMIT_THREADS`
+  - `CAMERA_RUNTIME_SHARED_PROCESSING_WORKERS`
+  - `INFERENCE_BATCH_SIZE`
+  - `INFERENCE_MAX_BATCH_SIZE`
+  - `INFERENCE_MAX_PENDING_FRAMES_PER_CAMERA`
+  - `IDENTITY_BATCH_SIZE`
+  - `IDENTITY_MAX_PENDING_FRAMES_PER_CAMERA`
+  - `LIVE_STREAM_PROCESS_FPS`
+
+验证要求
+--------
+修改完成后请做这些事：
+1. 运行尽可能小范围但有效的验证
+2. 如果项目里没有现成测试，就至少做静态检查/启动路径检查/关键函数级验证
+3. 给出一份结果总结，包含：
+- 改了哪些文件
+- 每项修改解决了什么问题
+- 还存在哪些未解决风险
+- 推荐的 `.env.docker` 参数组合
+- 如何观察是否真的达到“多相机实时处理最新帧”的目标
+
+额外要求
+--------
+- 不要只做配置调整，必须修改代码逻辑
+- 不要只改日志文案，必须改调度和可靠性
+- 不要删除现有功能（人脸、PPE、事件持久化、异步身份回填都要保留）
+- 如果某个点需要折中，请在最终总结里明确说明 trade-off
+
+后续小任务（2026-06-24 二次复查）
+-----------------------------
+1. 确认所有 `monitor-worker` / `worker-shard-*` 进程已经完整运行新代码版本。
+   - 代码里已经新增 `effective_processed_fps`、`latest_frame_age_ms`、`replaced_pending_count`、`submit_queue_reject_count`、`identity_skip_ratio`、`async_identity_merge_latency_ms`、`camera_hotness_score`
+   - 但实际 `CAMERA_RUNTIME_SUMMARY` 日志里很多相机仍未输出这些字段
+   - 需要排查是容器未完全重启、旧进程仍在运行，还是日志路径里混有旧实例输出
+   - 目标：确保新的 summary 字段真实落到日志中，便于后续判断“是否真的处理最新帧”
+
+2. 针对少数热点相机做点状优化，不做系统级大改。
+   - 优先检查高延迟或高 backpressure 的点位
+   - 当前复查中可重点关注：
+     - `c7bb5a0f-946d-41ef-bfa5-74405363a229`
+     - `76004f54-ef00-465f-921b-c86bc8cc8490`
+   - 检查项包括：
+     - 是否应固定为 `fast` profile
+     - 是否使用了过高分辨率/主码流
+     - 场景内人数或复杂度是否长期偏高
+     - 是否需要单独迁移到负载更低的 shard
+   - 目标：降低个别热点相机的 P95 推理时延，而不改动当前整体稳定链路
+
+3. 专项修复：当前版本“检测有了，但卡顿仍明显”，允许继续修改，但必须限制修改范围，重点解决不合理参数与热点相机策略问题。
+   背景：继续复查后确认，当前版本的主 worker 调度已经比之前稳定，但实时性仍然不理想：
+   - `inference_total_ms` 平均约 `340.9ms`，P95 约 `863ms`，P99 约 `1152ms`
+   - `latest_frame_age_ms` 平均约 `763ms`，P95 约 `1293ms`，P99 约 `1729ms`，最大超过 `4.5s`
+   - 热点相机集中明显，并非全局平均问题
+   - 当前更像是“结果能出来，但很多结果已经偏旧”，导致前端肉眼感受仍然卡
+   这说明问题已经不是“复杂调度把链路搞坏”，而是当前配置仍然过于偏向“保结果”，不够偏向“保最新帧”。
+
+   本轮目标：
+   - 继续解决卡顿
+   - 优先压低 `latest_frame_age_ms`
+   - 优先改善前端实时观感
+   - 保持现有检测能力，不回退到“几乎没人被检测”的状态
+
+   修改原则：
+   - 可以继续修改，不要因为怕改坏就不敢改
+   - 但修改必须合理、可解释、低风险
+   - 本轮重点改参数和热点相机策略，不再大改 worker 主调度逻辑
+   - 不允许重新引入复杂 `fast_lane` / `complex_lane` / `force_dispatch_stale` 体系
+
+   重点方向：
+   1. 调整参数，恢复“最新帧优先”
+      建议优先尝试：
+      - `CAMERA_RUNTIME_LATEST_ONLY_MODE=true`
+      - `INFERENCE_MAX_PENDING_FRAMES_PER_CAMERA=1`
+      - `INFERENCE_BATCH_SIZE=2`
+      - `INFERENCE_MIN_BATCH_SIZE=1`
+      - `INFERENCE_MAX_BATCH_SIZE=2`
+      - `INFERENCE_BATCH_TIMEOUT_MS=6`
+      原因：
+      - 当前 `latest_only=false`、`pending=4` 明显更容易积累旧帧
+      - 当前 batch 仍偏大，不利于压低 frame age
+
+   2. 对热点相机单独降载，而不是所有相机一刀切
+      当前热点相机重点关注：
+      - `37efcd63-7042-4d3b-bafd-fa32b9444d96`
+      - `926d2c74-d2fa-4bd7-84da-7a3646f2196e`
+      - `f082b8a4-acbb-4acd-8e8a-9e54371d671f`
+      - `63518f35-649e-4804-b200-c367ef24f85c`
+      - `72f58fa2-8406-4520-b57d-fca20ad19c92`
+      - `7857c36a-ad73-41e3-95f2-3e96053f8e37`
+      对这些相机优先考虑：
+      - 固定 `fast` profile
+      - 必要时单独覆盖配置
+      - 目标是先压住这些相机的 `latest_frame_age_ms`
+
+   3. 代码只允许小修，不允许重构主流程
+      如需改代码，只允许这类修改：
+      - runtime 侧更积极地保最新帧
+      - 热点相机配置覆盖能力增强
+      - summary / metrics 更准确反映热点状态
+      - 轻微修正 batch 参数读取或应用方式
+      禁止：
+      - 重写 `backend/app/inference_batch_worker.py` 主调度框架
+      - 新增复杂 lane 系统
+      - 用新的 stale/priority 机制替代当前简单逻辑
+
+   本轮验收标准：
+   - `latest_frame_age_ms` 明显下降
+   - `inference_batch_wait_ms` / `avg_wait_ms` / `p95_wait_ms` 明显下降
+   - 前端肉眼卡顿感明显减轻
+   - 热点相机的旧帧问题明显缓解
+   - 保持持续有人体检测结果，不回退到“几乎没人被检测”的状态
+
+   输出要求：
+   - 明确列出最终采用的参数组合
+   - 明确列出哪些热点相机被单独降档/覆盖
+   - 给出修改前后对比：
+     - `latest_frame_age_ms`
+     - `inference_total_ms`
+     - `avg_wait_ms/p95_wait_ms`
+     - 热点相机表现
+   - 如果按上述调参后仍然明显卡顿，请明确说明：当前 29 路是否已经超过现有 inference worker / shard 容量极限，不要继续靠代码硬扛
+
+4. 日志与部署一致性收尾。
+   - 统一 `CAMERA_RUNTIME_SUMMARY` / `CAMERA_RUNTIME_SHARD_SUMMARY` 的输出与检索方式
+   - 确认所有 worker/shard 都运行同一版代码
+   - 如果日志目录中混有旧格式输出，请在总结里明确说明，避免误判
+
+后续维护约定
+------------
+- 后续新的 Codex 指令继续追加或覆盖更新在本文件中。
+- 如果是新阶段任务，优先在文件顶部增加“更新时间”和“任务主题”。
+- 如果旧任务已失效，请直接替换对应段落，不要保留冲突要求。

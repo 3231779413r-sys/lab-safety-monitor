@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   AlertTriangle,
@@ -10,7 +10,6 @@ import {
   Radio,
   Shield,
   User,
-  Users,
   Video,
 } from "lucide-react";
 import api, {
@@ -61,11 +60,32 @@ const MAX_ALERTS = 10;
 const FLOOR_OPTIONS = ["一楼", "二楼", "三楼", "四楼"] as const;
 const SNAPSHOT_LIMIT = 6;
 const MAIN_PEOPLE_REFRESH_MS = 333;
+const MEDIA_ASPECT_RATIO = "16 / 9";
+const MONITOR_LAYOUT_STYLE = {
+  "--monitor-header-height": "52px",
+  "--monitor-gap": "16px",
+  "--monitor-filter-height": "40px",
+  "--monitor-video-height": "52%",
+  "--monitor-floor-row-height": "24%",
+} as CSSProperties;
 
 function parseTimestamp(value?: string | null) {
   if (!value) return 0;
   const time = new Date(value).getTime();
   return Number.isFinite(time) ? time : 0;
+}
+
+function formatDateTime(value?: string | null) {
+  if (!value) return "--";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "--";
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function formatTimeOnly(value?: string | null) {
+  const formatted = formatDateTime(value);
+  return formatted === "--" ? formatted : formatted.slice(11);
 }
 
 function isRetainedAlert(timestamp: string, now = Date.now()) {
@@ -128,9 +148,11 @@ function mapLiveAlertToMonitorAlert(alert: AlertMessage): MonitorAlert {
 function SnapshotOverlayImage({
   event,
   className,
+  fit = "cover",
 }: {
   event: ComplianceEvent;
   className?: string;
+  fit?: "cover" | "contain";
 }) {
   const [imageLoaded, setImageLoaded] = useState(false);
   const imageUrl = resolveApiAssetUrl(event.snapshot_url);
@@ -148,14 +170,14 @@ function SnapshotOverlayImage({
       <img
         src={imageUrl}
         alt={event.violation_labels?.join("、") || "违规快照"}
-        className="h-full w-full object-cover"
+        className={cn("h-full w-full", fit === "contain" ? "object-contain" : "object-cover")}
         onLoad={() => setImageLoaded(true)}
       />
       {imageLoaded && event.snapshot_overlay?.boxes?.length ? (
         <svg
           viewBox={`0 0 ${event.snapshot_overlay.image_width} ${event.snapshot_overlay.image_height}`}
           className="pointer-events-none absolute inset-0 h-full w-full"
-          preserveAspectRatio="none"
+          preserveAspectRatio={fit === "contain" ? "xMidYMid meet" : "none"}
         >
           {event.snapshot_overlay.boxes.map((item, index) => {
             const [x1, y1, x2, y2] = item.box;
@@ -207,6 +229,7 @@ function StreamCameraFrame({
 
   useEffect(() => {
     if (displayedSrc && displayedSrc.startsWith(api.getLiveFeedUrl(cameraId, { raw: true }))) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setPendingSrc(null);
       setHasLoadedFrame(true);
       return;
@@ -299,55 +322,60 @@ function FloorSnapshotCard({
   panel,
   selected,
   onSelect,
+  className,
 }: {
   panel: FloorPanel;
   selected: boolean;
   onSelect: (cameraId: string) => void;
+  className?: string;
 }) {
   const isClickable = Boolean(panel.cameraId);
   return (
-    <button
-      type="button"
-      disabled={!isClickable}
-      onClick={() => {
-        if (panel.cameraId) onSelect(panel.cameraId);
-      }}
-      className={cn(
-        "relative flex aspect-video h-full min-h-0 w-full flex-col overflow-hidden rounded-xl border text-left transition",
-        selected ? "border-primary shadow-[0_0_0_1px_var(--color-primary)]" : "border-border/60 bg-card/70",
-        isClickable ? "hover:border-primary/70" : "cursor-default"
-      )}
-    >
-      <div className="absolute left-3 top-3 z-10 rounded-md bg-black/70 px-2 py-1 text-xs font-medium text-white">
-        {panel.floor}
-      </div>
-      {panel.imageUrl ? (
-        <div className="relative h-full w-full flex-1 overflow-hidden bg-black">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={panel.imageUrl} alt={`${panel.floor}有人画面`} className="h-full w-full object-cover" />
-          <LivePeopleOverlayLayer
-            frameWidth={panel.frameWidth}
-            frameHeight={panel.frameHeight}
-            persons={panel.persons}
-          />
+    <div className={cn("flex min-h-0 items-center justify-center", className)}>
+      <button
+        type="button"
+        disabled={!isClickable}
+        onClick={() => {
+          if (panel.cameraId) onSelect(panel.cameraId);
+        }}
+        className={cn(
+          "relative flex h-full min-h-0 w-auto max-w-full min-w-0 flex-col overflow-hidden rounded-xl border text-left transition",
+          selected ? "border-primary shadow-[0_0_0_1px_var(--color-primary)]" : "border-border/60 bg-card/70",
+          isClickable ? "hover:border-primary/70" : "cursor-default"
+        )}
+        style={{ aspectRatio: MEDIA_ASPECT_RATIO }}
+      >
+        <div className="absolute left-3 top-3 z-10 rounded-md bg-black/70 px-2 py-1 text-xs font-medium text-white">
+          {panel.floor}
         </div>
-      ) : (
-        <div className="flex h-full min-h-0 flex-1 items-center justify-center bg-muted/20">
-          <ImageFallback />
-        </div>
-      )}
-      <div className="absolute inset-x-0 bottom-0 z-10 flex items-center justify-between gap-2 bg-gradient-to-t from-black/75 via-black/35 to-transparent px-3 py-3 text-white">
-        <div className="min-w-0">
-          <div className="truncate text-sm font-medium">{panel.cameraName || `${panel.floor}暂无人员`}</div>
-          <div className="text-[11px] text-white/75">
-            {panel.lastFrameAt ? new Date(panel.lastFrameAt).toLocaleTimeString() : "等待检测"}
+        {panel.imageUrl ? (
+          <div className="relative h-full w-full flex-1 overflow-hidden bg-black">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={panel.imageUrl} alt={`${panel.floor}有人画面`} className="h-full w-full object-cover" />
+            <LivePeopleOverlayLayer
+              frameWidth={panel.frameWidth}
+              frameHeight={panel.frameHeight}
+              persons={panel.persons}
+            />
+          </div>
+        ) : (
+          <div className="flex h-full min-h-0 flex-1 items-center justify-center bg-muted/20">
+            <ImageFallback />
+          </div>
+        )}
+        <div className="absolute inset-x-0 bottom-0 z-10 flex items-center justify-between gap-2 bg-gradient-to-t from-black/80 via-black/45 to-transparent px-3 py-3 text-white">
+          <div className="min-w-0">
+            <div className="truncate text-sm font-medium">{panel.cameraName || `${panel.floor}暂无人员`}</div>
+            <div className="text-[11px] text-white/75">
+              {panel.lastFrameAt ? formatDateTime(panel.lastFrameAt) : "等待检测"}
+            </div>
+          </div>
+          <div className="shrink-0 rounded-full bg-white/15 px-2 py-1 text-[11px]">
+            {panel.personCount > 0 ? `${panel.personCount} 人` : "空闲"}
           </div>
         </div>
-        <div className="shrink-0 rounded-full bg-white/15 px-2 py-1 text-[11px]">
-          {panel.personCount > 0 ? `${panel.personCount} 人` : "空闲"}
-        </div>
-      </div>
-    </button>
+      </button>
+    </div>
   );
 }
 
@@ -382,7 +410,7 @@ function AlertsPanel({ alerts }: { alerts: MonitorAlert[] }) {
                   </div>
                   <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
                     <Clock className="h-3 w-3" />
-                    {new Date(alert.timestamp).toLocaleTimeString()}
+                    {formatTimeOnly(alert.timestamp)}
                   </div>
                 </div>
 
@@ -398,7 +426,7 @@ function AlertsPanel({ alerts }: { alerts: MonitorAlert[] }) {
                     </div>
                     <div className="grid grid-cols-[64px_minmax(0,1fr)] items-start gap-2">
                       <span className="text-muted-foreground">时间</span>
-                      <span className="font-medium text-foreground">{new Date(alert.timestamp).toLocaleString()}</span>
+                      <span className="font-medium text-foreground">{formatDateTime(alert.timestamp)}</span>
                     </div>
                     <div className="grid grid-cols-[64px_minmax(0,1fr)] items-start gap-2">
                       <span className="flex items-center gap-1 text-muted-foreground">
@@ -457,6 +485,7 @@ export default function MonitorPage() {
 
   useEffect(() => {
     if (!selectedCameraId && filteredCameras.length > 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelectedCameraId(filteredCameras[0].id);
       return;
     }
@@ -494,12 +523,13 @@ export default function MonitorPage() {
   }, [floorActivityItems]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setStableFloorPanels((current) => {
       const next = { ...current };
       let changed = false;
 
       for (const panel of floorSnapshotCandidates) {
-        if (!panel.cameraId || !panel.imageUrl || panel.personCount <= 0) {
+        if (!panel.cameraId || !panel.imageUrl) {
           continue;
         }
 
@@ -534,19 +564,11 @@ export default function MonitorPage() {
     });
   }, [floorSnapshotCandidates]);
 
-  const floorPersonCountMap = useMemo(() => {
-    const result = new Map<string, number>();
-    floorSnapshotCandidates.forEach((panel) => {
-      const stableCount = stableFloorPanels[panel.floor]?.personCount ?? 0;
-      result.set(panel.floor, Math.max(panel.personCount, stableCount));
-    });
-    return result;
-  }, [floorSnapshotCandidates, stableFloorPanels]);
-
   useEffect(() => {
     if (recentViolations.length === 0) {
       return;
     }
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setAlerts((current) => mergeAlerts([...current, ...recentViolations.map(mapRecentViolationToAlert)]));
   }, [recentViolations]);
 
@@ -556,6 +578,7 @@ export default function MonitorPage() {
     }
 
     const nextAlert = mapLiveAlertToMonitorAlert(lastMessage);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setAlerts((current) => mergeAlerts([...current, nextAlert]));
 
     if (lastMessage.type !== "violation") {
@@ -591,14 +614,36 @@ export default function MonitorPage() {
   }, []);
 
   const latestSnapshots = useMemo(
-    () => latestSnapshotEvents.filter((event) => !!event.snapshot_url).slice(0, SNAPSHOT_LIMIT),
+    () => latestSnapshotEvents.filter((event) => !!event.snapshot_url).slice(0, 4),
     [latestSnapshotEvents]
   );
 
+  const floorPanels = useMemo(
+    () =>
+      FLOOR_OPTIONS.map((floor) => {
+        const panel = stableFloorPanels[floor] ?? {
+          floor,
+          cameraId: null,
+          cameraName: null,
+          personCount: 0,
+          imageUrl: null,
+          lastFrameAt: null,
+          frameWidth: 0,
+          frameHeight: 0,
+          persons: [],
+        };
+        return {
+          ...panel,
+          personCount: panel.personCount,
+        };
+      }),
+    [stableFloorPanels]
+  );
+
   return (
-    <div className="flex min-h-[calc(100dvh-5.5rem)] flex-col gap-3 xl:gap-4 lg:min-h-[calc(100dvh-2rem)]">
-      <div className="grid shrink-0 items-center gap-3 xl:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] xl:gap-4">
-        <div className="flex flex-wrap items-center gap-3 xl:justify-self-start">
+    <div className="flex h-full min-h-0 flex-col gap-4" style={MONITOR_LAYOUT_STYLE}>
+      <div className="grid h-[var(--monitor-header-height)] shrink-0 items-center gap-3 xl:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
+        <div className="flex flex-wrap items-center gap-2 xl:justify-self-start">
           <div className="flex items-center gap-2 rounded-full border border-border/60 bg-card px-4 py-2 shadow-sm">
             <Radio className={cn("h-4 w-4", isConnected ? "text-success" : "text-muted-foreground")} />
             <span className="text-sm font-medium">{isConnected ? "实时监控中" : "信号重连中"}</span>
@@ -616,171 +661,156 @@ export default function MonitorPage() {
         </div>
 
         <div className="text-center xl:justify-self-center">
-          <h1 className="mt-2 text-3xl font-semibold text-foreground">实时监控大屏</h1>
+          <h1 className="text-2xl font-semibold text-foreground">实时监控大屏</h1>
         </div>
 
-        <div className="flex items-center justify-start gap-2 xl:justify-self-end">
-          <div className="hidden items-center gap-2 rounded-full border border-border/60 bg-card px-4 py-2 text-sm text-muted-foreground shadow-sm lg:flex">
-            <Users className="h-4 w-4 text-primary" />
-            楼层侧图保留最新一张有人检测画面
-          </div>
-        </div>
+        <div />
       </div>
 
-      <div className="grid min-h-0 flex-1 content-start gap-3 xl:grid-cols-[minmax(0,4fr)_minmax(320px,1fr)] xl:gap-4">
-        <section className="min-h-0 overflow-hidden">
-          <div className="grid min-h-0 content-start gap-3 xl:gap-4">
-            <Card className="overflow-hidden border-border/60 bg-card/95 py-0 shadow-sm">
-              <CardContent className="grid gap-3 p-3 lg:p-4">
-                <div className="flex flex-wrap items-center gap-3">
-                  <Select value={selectedFloor} onValueChange={setSelectedFloor}>
-                    <SelectTrigger className="h-10 w-[140px]">
-                      <SelectValue placeholder="选择楼层" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="全部">全部楼层</SelectItem>
-                      {FLOOR_OPTIONS.map((floor) => (
-                        <SelectItem key={floor} value={floor}>
-                          {floor}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-
-                  <Select
-                    value={selectedCameraId ?? undefined}
-                    onValueChange={setSelectedCameraId}
-                    disabled={filteredCameras.length === 0}
-                  >
-                    <SelectTrigger className="h-10 min-w-[220px] flex-1 xl:max-w-[360px]">
-                      <SelectValue placeholder="选择监控" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {filteredCameras.map((camera) => (
-                        <SelectItem key={camera.id} value={camera.id}>
-                          {buildCameraLabel(camera)}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+      <div className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(340px,1fr)_minmax(620px,38vw)_minmax(340px,1fr)]">
+        <aside className="min-h-0 overflow-hidden">
+          <Card className="flex h-full min-h-0 flex-col overflow-hidden border-border/60 bg-card/95 py-0 shadow-sm">
+            <CardContent className="min-h-0 flex-1 p-4">
+              {snapshotsLoading ? (
+                <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden">
+                  {Array.from({ length: 4 }).map((_, index) => (
+                    <Skeleton key={index} className="min-h-0 flex-1 rounded-xl" />
+                  ))}
                 </div>
-
-                <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
-                  <div className="flex flex-col">
-                    <div className="relative aspect-video w-full overflow-hidden rounded-xl border border-border/60 bg-black">
-                      {selectedCamera ? (
-                        <>
-                          <StreamCameraFrame
-                            cameraId={selectedCamera.id}
-                            cameraName={selectedCamera.name}
-                            className="h-full w-full"
-                          />
-                          <LivePeopleOverlayLayer
-                            frameWidth={(selectedCameraPeople as LivePersonOverlayResponse | undefined)?.frame_width ?? 0}
-                            frameHeight={(selectedCameraPeople as LivePersonOverlayResponse | undefined)?.frame_height ?? 0}
-                            persons={(selectedCameraPeople as LivePersonOverlayResponse | undefined)?.persons ?? []}
-                          />
-                          <div className="absolute left-3 top-3 flex max-w-[75%] items-center gap-2 rounded-md bg-black/72 px-3 py-2 text-white backdrop-blur-sm">
-                            <span className="inline-flex h-2 w-2 rounded-full bg-success" />
-                            <span className="truncate text-sm font-medium">{selectedCamera.name}</span>
+              ) : latestSnapshots.length > 0 ? (
+                <div className="grid h-full min-h-0 grid-rows-4 gap-3">
+                  {latestSnapshots.map((event) => (
+                    <div
+                      key={event.id}
+                      className="relative min-h-0 overflow-hidden rounded-xl border border-border/60 bg-card shadow-sm"
+                    >
+                      <div className="relative h-full w-full overflow-hidden bg-black">
+                        <SnapshotOverlayImage event={event} fit="contain" />
+                        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/72 to-transparent px-3 py-2">
+                          <div className="break-words text-sm font-semibold leading-5 text-white">
+                            {event.violation_labels?.join("、") || "危险行为"}
                           </div>
-                          <div className="absolute bottom-3 left-3 flex items-center gap-2 rounded-md bg-primary/85 px-3 py-2 text-xs font-medium text-white">
-                            <Video className="h-3.5 w-3.5" />
-                            实时视频流
-                          </div>
-                        </>
-                      ) : (
-                        <div className="flex h-full items-center justify-center">
-                          <div className="flex flex-col items-center gap-3 text-center text-muted-foreground">
-                            <CameraOff className="h-10 w-10 opacity-50" />
-                            <div>
-                              <div className="text-base font-medium text-foreground">暂无可用监控</div>
-                              <div className="text-sm">请先选择楼层或启用摄像头</div>
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    {FLOOR_OPTIONS.map((floor) => {
-                      const panel = stableFloorPanels[floor] ?? {
-                        floor,
-                        cameraId: null,
-                        cameraName: null,
-                        personCount: 0,
-                        imageUrl: null,
-                        lastFrameAt: null,
-                        frameWidth: 0,
-                        frameHeight: 0,
-                        persons: [],
-                      };
-                      return (
-                        <FloorSnapshotCard
-                          key={floor}
-                          panel={{
-                            ...panel,
-                            personCount: floorPersonCountMap.get(floor) ?? panel.personCount,
-                          }}
-                          selected={panel.cameraId === selectedCameraId}
-                          onSelect={setSelectedCameraId}
-                        />
-                      );
-                    })}
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="min-h-0 overflow-hidden border-border/60 bg-card/95 py-0 shadow-sm">
-              <CardContent className="flex h-full min-h-0 flex-col p-3 lg:p-4">
-                {snapshotsLoading ? (
-                  <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-                    {Array.from({ length: SNAPSHOT_LIMIT }).map((_, index) => (
-                      <Skeleton key={index} className="aspect-video w-full rounded-xl" />
-                    ))}
-                  </div>
-                ) : latestSnapshots.length > 0 ? (
-                  <div className="grid h-full min-h-0 grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-                    {latestSnapshots.map((event) => (
-                      <div
-                        key={event.id}
-                        className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-border/60 bg-card shadow-sm"
-                      >
-                        <div className="aspect-video overflow-hidden bg-black">
-                          <SnapshotOverlayImage event={event} />
-                        </div>
-                        <div className="border-t border-border/60 bg-gradient-to-b from-background/10 via-card to-muted/20 px-3 py-2.5">
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="min-w-0">
-                              <div className="line-clamp-1 text-sm font-semibold text-foreground">
-                                {event.violation_labels?.join("、") || "危险行为"}
-                              </div>
-                              <div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground">
-                                <span className="line-clamp-1">
-                                  {event.camera_name || event.camera_id || "未知点位"}
-                                </span>
-                                <span className="h-1 w-1 rounded-full bg-border" />
-                                <span className="shrink-0">{new Date(event.timestamp).toLocaleTimeString()}</span>
-                              </div>
-                            </div>
-                            <span className="shrink-0 rounded-full border border-danger/20 bg-danger/8 px-2 py-1 text-[10px] font-medium text-danger">
-                              告警
-                            </span>
+                          <div className="break-words text-xs leading-5 text-white/90">
+                            {(event.camera_name || event.camera_id || "未知点位")} {formatDateTime(event.timestamp)}
                           </div>
                         </div>
                       </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-border/70 bg-muted/20 text-sm text-muted-foreground">
+                  暂无违规快照
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </aside>
+
+        <section className="min-h-0 overflow-hidden">
+          <Card className="h-full min-h-0 overflow-hidden border-border/60 bg-card/95 py-0 shadow-sm">
+            <CardContent className="flex h-full min-h-0 flex-col gap-4 p-4">
+              <div className="flex h-[var(--monitor-filter-height)] shrink-0 items-center gap-3">
+                <Select value={selectedFloor} onValueChange={setSelectedFloor}>
+                  <SelectTrigger className="h-full w-[112px] justify-start text-left">
+                    <SelectValue placeholder="选择楼层" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="全部">全部楼层</SelectItem>
+                    {FLOOR_OPTIONS.map((floor) => (
+                      <SelectItem key={floor} value={floor}>
+                        {floor}
+                      </SelectItem>
                     ))}
-                  </div>
-                ) : (
-                  <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-border/70 bg-muted/20 text-sm text-muted-foreground">
-                    暂无违规快照
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </div>
+                  </SelectContent>
+                </Select>
+
+                <Select
+                  value={selectedCameraId ?? undefined}
+                  onValueChange={setSelectedCameraId}
+                  disabled={filteredCameras.length === 0}
+                >
+                  <SelectTrigger className="h-full w-[220px] max-w-full justify-start text-left">
+                    <SelectValue placeholder="选择监控" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {filteredCameras.map((camera) => (
+                      <SelectItem key={camera.id} value={camera.id}>
+                        {buildCameraLabel(camera)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div
+                className="grid min-h-0 flex-1 gap-4"
+                style={{
+                  gridTemplateRows:
+                    "minmax(0, var(--monitor-video-height)) minmax(0, var(--monitor-floor-row-height)) minmax(0, var(--monitor-floor-row-height))",
+                }}
+              >
+                <div className="flex min-h-0 items-center justify-center overflow-hidden rounded-xl border border-border/60 bg-black">
+                  {selectedCamera ? (
+                    <div className="relative h-full w-auto max-w-full overflow-hidden" style={{ aspectRatio: MEDIA_ASPECT_RATIO }}>
+                      <StreamCameraFrame
+                        cameraId={selectedCamera.id}
+                        cameraName={selectedCamera.name}
+                        className="h-full w-full"
+                      />
+                      <LivePeopleOverlayLayer
+                        frameWidth={(selectedCameraPeople as LivePersonOverlayResponse | undefined)?.frame_width ?? 0}
+                        frameHeight={(selectedCameraPeople as LivePersonOverlayResponse | undefined)?.frame_height ?? 0}
+                        persons={(selectedCameraPeople as LivePersonOverlayResponse | undefined)?.persons ?? []}
+                      />
+                      <div className="absolute left-3 top-3 flex max-w-[75%] items-center gap-2 rounded-md bg-black/72 px-3 py-2 text-white backdrop-blur-sm">
+                        <span className="inline-flex h-2 w-2 rounded-full bg-success" />
+                        <span className="truncate text-sm font-medium">{selectedCamera.name}</span>
+                      </div>
+                      <div className="absolute bottom-3 left-3 flex items-center gap-2 rounded-md bg-primary/85 px-3 py-2 text-xs font-medium text-white">
+                        <Video className="h-3.5 w-3.5" />
+                        实时视频流
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center">
+                      <div className="flex flex-col items-center gap-3 text-center text-muted-foreground">
+                        <CameraOff className="h-10 w-10 opacity-50" />
+                        <div>
+                          <div className="text-base font-medium text-foreground">暂无可用监控</div>
+                          <div className="text-sm">请先选择楼层或启用摄像头</div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid min-h-0 grid-cols-2 gap-4">
+                  {floorPanels.slice(0, 2).map((panel) => (
+                    <FloorSnapshotCard
+                      key={panel.floor}
+                      className="min-h-0"
+                      panel={panel}
+                      selected={panel.cameraId === selectedCameraId}
+                      onSelect={setSelectedCameraId}
+                    />
+                  ))}
+                </div>
+
+                <div className="grid min-h-0 grid-cols-2 gap-4">
+                  {floorPanels.slice(2).map((panel) => (
+                    <FloorSnapshotCard
+                      key={panel.floor}
+                      className="min-h-0"
+                      panel={panel}
+                      selected={panel.cameraId === selectedCameraId}
+                      onSelect={setSelectedCameraId}
+                    />
+                  ))}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
         </section>
 
         <aside className="min-h-0 overflow-hidden">

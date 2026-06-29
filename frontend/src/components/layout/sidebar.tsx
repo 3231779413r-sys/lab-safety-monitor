@@ -30,6 +30,7 @@ import logoCollapsed from "@/app/logo.png";
 import { Button } from "@/components/ui/button";
 import {
   STORAGE_KEYS,
+  SIDEBAR_STATE_EVENT,
   getStorageItem,
   setStorageItem,
   migrateStorageKeys,
@@ -473,6 +474,13 @@ export function Sidebar() {
     const newState = !collapsed;
     setCollapsed(newState);
     setStorageItem(STORAGE_KEYS.SIDEBAR_COLLAPSED, String(newState));
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent(SIDEBAR_STATE_EVENT, {
+          detail: { collapsed: newState },
+        })
+      );
+    }
   };
 
   const handleToggleTheme = () => {

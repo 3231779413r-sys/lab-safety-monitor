@@ -2,6 +2,8 @@
 
 const VERSION = "v1";
 
+export const SIDEBAR_STATE_EVENT = "sentinelvision:sidebar-state";
+
 export const STORAGE_KEYS = {
   SIDEBAR_COLLAPSED: `sentinelvision:sidebar-collapsed:${VERSION}`,
   THEME: `sentinelvision:theme:${VERSION}`,

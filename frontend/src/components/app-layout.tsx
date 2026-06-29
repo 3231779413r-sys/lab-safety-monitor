@@ -49,12 +49,12 @@ export function AppLayout({ children }: AppLayoutProps) {
           <div className="absolute top-0 right-0 w-64 h-64 -z-10 bg-gradient-to-br from-primary/5 to-transparent blur-3xl" />
           <main
             className={cn(
-              "flex-1 overflow-y-auto lg:px-8",
+              "relative flex-1",
               isDashboardPage
-                ? "px-4 pt-4 pb-3 lg:pt-4 lg:pb-3"
+                ? "overflow-y-auto px-4 pt-4 pb-3 lg:px-8 lg:pt-4 lg:pb-3"
                 : isMonitorPage
-                  ? "px-3 pb-3 pt-[4.5rem] lg:px-4 lg:pb-4 lg:pt-4"
-                  : "p-4 pt-20 lg:p-8 lg:pt-8"
+                  ? "h-full min-h-0 overflow-hidden px-3 pb-3 pt-[4.5rem] lg:px-4 lg:pb-4 lg:pt-4"
+                  : "overflow-y-auto p-4 pt-20 lg:p-8 lg:pt-8"
             )}
           >
             {children}

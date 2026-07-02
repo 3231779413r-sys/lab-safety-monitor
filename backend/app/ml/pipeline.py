@@ -23,7 +23,11 @@ from .action_analyzer import get_pose_action_analyzer
 from .pose_action_filter import get_pose_action_filter
 from .mask_utils import draw_person_with_ppe, get_color, draw_label_badge
 from ..core.config import settings
-from ..core.danger_events import match_danger_event_types, normalize_violation_key
+from ..core.danger_events import (
+    canonicalize_danger_event_key,
+    match_danger_event_types,
+    normalize_violation_key,
+)
 from ..models.person import Person
 from ..models.external_person import ExternalPerson
 from ..models.supervision import ExternalPersonnelRegistration
@@ -602,20 +606,20 @@ class DetectionPipeline:
         timestamp: datetime,
     ) -> None:
         camera_scope = {
-            normalize_violation_key(str(item))
+            canonicalize_danger_event_key(str(item))
             for item in (self._camera_config.get("camera_detection_scope") or [])
-            if normalize_violation_key(str(item))
+            if canonicalize_danger_event_key(str(item))
         }
         backend_scope = {
-            normalize_violation_key(str(item))
+            canonicalize_danger_event_key(str(item))
             for item in (self._camera_config.get("backend_detection_scope") or [])
-            if normalize_violation_key(str(item))
+            if canonicalize_danger_event_key(str(item))
         }
         configured_scope = camera_scope.union(backend_scope)
         other_scope = {
-            normalize_violation_key(str(item))
+            canonicalize_danger_event_key(str(item))
             for item in (self._camera_config.get("other_person_scope") or [])
-            if normalize_violation_key(str(item))
+            if canonicalize_danger_event_key(str(item))
         }
         global_event_types: set[str] = set()
         if "area_overcapacity" in configured_scope:
@@ -669,12 +673,14 @@ class DetectionPipeline:
         for item in person_result.get("missing_ppe", []):
             matched_types = match_danger_event_types([item])
             if matched_types and matched_types[0] in allowed_event_types:
-                filtered_missing_ppe.append(item)
+                canonical_item = canonicalize_danger_event_key(item)
+                if canonical_item:
+                    filtered_missing_ppe.append(canonical_item)
 
         filtered_action_violations: list[Dict[str, Any]] = []
         seen_actions: set[str] = set()
         for action in person_result.get("action_violations", []):
-            action_name = normalize_violation_key(str(action.get("action", "")))
+            action_name = canonicalize_danger_event_key(str(action.get("action", "")))
             if action_name and action_name in allowed_event_types and action_name not in seen_actions:
                 filtered_action_violations.append(action)
                 seen_actions.add(action_name)
@@ -690,7 +696,7 @@ class DetectionPipeline:
             filtered_action_violations.append(forced_action)
             seen_actions.add(forced_event)
             if not any(
-                normalize_violation_key(str(item.get("action", ""))) == forced_event
+                canonicalize_danger_event_key(str(item.get("action", ""))) == forced_event
                 and item.get("box") == forced_action["box"]
                 for item in frame_action_violations
             ):
@@ -777,19 +783,19 @@ class DetectionPipeline:
         if not value:
             return []
         try:
-            parsed = json.loads(value)
-            if isinstance(parsed, list):
-                result: list[str] = []
-                for item in parsed:
-                    normalized = normalize_violation_key(str(item))
-                    if normalized and normalized not in result:
-                        result.append(normalized)
+                parsed = json.loads(value)
+                if isinstance(parsed, list):
+                    result: list[str] = []
+                    for item in parsed:
+                        normalized = canonicalize_danger_event_key(str(item))
+                        if normalized and normalized not in result:
+                            result.append(normalized)
                 return result
         except json.JSONDecodeError:
             pass
         result: list[str] = []
         for item in value.split(","):
-            normalized = normalize_violation_key(item)
+            normalized = canonicalize_danger_event_key(item)
             if normalized and normalized not in result:
                 result.append(normalized)
         return result

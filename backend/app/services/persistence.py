@@ -1,3 +1,5 @@
+import logging
+import asyncio
 from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
 from uuid import uuid4
@@ -6,7 +8,12 @@ import numpy as np
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.config import settings
-from ..core.danger_events import get_danger_event_label, match_danger_event_types, normalize_violation_key
+from ..core.danger_events import (
+    canonicalize_danger_event_key,
+    canonicalize_danger_event_values,
+    get_danger_event_label,
+    match_danger_event_types,
+)
 from ..core.websocket import manager as ws_manager
 from ..core.realtime_bus import publish_realtime_message
 from ..services.event_service import EventService
@@ -15,6 +22,9 @@ from ..services.person_service import PersonService
 from ..services.deduplication import get_deduplication_manager, DeduplicationManager
 from ..services.inspection_service import InspectionService
 from ..models.video_source import VideoSource
+
+
+logger = logging.getLogger(__name__)
 
 
 VIOLATION_LABEL_MAP = {
@@ -49,9 +59,9 @@ VIOLATION_LABEL_MAP = {
 
 
 def _format_violation_label(value: str) -> str:
-    normalized = normalize_violation_key(value)
+    normalized = canonicalize_danger_event_key(value)
     if normalized.startswith("action:"):
-        normalized = normalize_violation_key(normalized.split(":", 1)[1])
+        normalized = canonicalize_danger_event_key(normalized.split(":", 1)[1])
     if normalized in {
         "hardhat",
         "mask",
@@ -98,6 +108,58 @@ class PersistenceManager:
         self.person_service = PersonService(session)
         self.dedup_manager = get_deduplication_manager()
         self.inspection_service = InspectionService(session)
+
+    async def _capture_person_dataset_frame(
+        self,
+        *,
+        snapshot_frame: Any,
+        timestamp: datetime,
+        camera_id: Optional[str],
+        frame_number: int,
+    ) -> None:
+        def _upload() -> None:
+            storage = get_object_storage()
+            object_key = storage.build_person_dataset_key(
+                timestamp=timestamp,
+                camera_id=camera_id,
+                frame_number=frame_number,
+            )
+            storage.upload_jpeg_frame(
+                snapshot_frame,
+                object_key=object_key,
+                bucket=storage.dataset_bucket,
+                quality=85,
+            )
+
+        try:
+            await asyncio.to_thread(_upload)
+        except Exception as exc:
+            logger.warning("Failed to upload person dataset frame: %s", exc)
+
+    def _schedule_person_dataset_capture(
+        self,
+        *,
+        snapshot_frame: Any,
+        timestamp: datetime,
+        camera_id: Optional[str],
+        frame_number: int,
+    ) -> None:
+        task = asyncio.create_task(
+            self._capture_person_dataset_frame(
+                snapshot_frame=snapshot_frame,
+                timestamp=timestamp,
+                camera_id=camera_id,
+                frame_number=frame_number,
+            )
+        )
+
+        def _log_failure(finished_task: asyncio.Task) -> None:
+            try:
+                finished_task.result()
+            except Exception as exc:
+                logger.warning("Failed to upload person dataset frame: %s", exc)
+
+        task.add_done_callback(_log_failure)
 
     def _build_cooldown_identity(
         self,
@@ -160,7 +222,7 @@ class PersistenceManager:
         for detection in person.get("ppe_detections", []) or []:
             if not detection.get("is_violation"):
                 continue
-            violation_key = normalize_violation_key(str(detection.get("label", "")))
+            violation_key = canonicalize_danger_event_key(str(detection.get("label", "")))
             if violation_key not in missing_ppe:
                 continue
             box = self._normalize_box(detection.get("box"))
@@ -180,7 +242,7 @@ class PersistenceManager:
             )
 
         for action in person.get("action_violations", []) or []:
-            action_name = normalize_violation_key(str(action.get("action", "")))
+            action_name = canonicalize_danger_event_key(str(action.get("action", "")))
             if action_name not in action_violations:
                 continue
             box = self._normalize_box(action.get("box"))
@@ -238,16 +300,27 @@ class PersistenceManager:
 
         camera_name_cache: dict[str, str] = {}
         queued_updates: list[dict[str, Any]] = []
+        video_source = result.get("video_source", "unknown")
+        camera_id = None
+        if video_source and video_source.startswith("camera:"):
+            camera_id = video_source.replace("camera:", "")
+
+        if (
+            settings.ENABLE_PERSON_DATASET_CAPTURE
+            and snapshot_frame is not None
+            and persons
+        ):
+            self._schedule_person_dataset_capture(
+                snapshot_frame=snapshot_frame,
+                timestamp=timestamp,
+                camera_id=camera_id,
+                frame_number=frame_number,
+            )
 
         # Process each person in the frame
         for person in persons:
             # Convert track_id to native Python int
             track_id = to_python_type(person.get("track_id"))
-            video_source = result.get("video_source", "unknown")
-
-            camera_id = None
-            if video_source and video_source.startswith("camera:"):
-                camera_id = video_source.replace("camera:", "")
 
             person_id = person.get("person_id")
             tracking_key = person.get("tracking_key") or person_id
@@ -275,12 +348,15 @@ class PersistenceManager:
 
             # Get violation info from temporal filter results
             is_stable_violation = person.get("stable_violation", False)
-            stable_missing_ppe = person.get("stable_missing_ppe", [])
+            stable_missing_ppe = canonicalize_danger_event_values(
+                person.get("stable_missing_ppe", [])
+            )
             action_violations = person.get("action_violations", [])
             action_violations = [
                 item
                 for item in action_violations
-                if item.get("action") != "workshop_overcapacity"
+                if canonicalize_danger_event_key(str(item.get("action", "")))
+                != "workshop_overcapacity"
             ]
 
             camera_name = camera_id or video_source or "监控点"
@@ -308,7 +384,12 @@ class PersistenceManager:
             # Combine missing PPE with action violations for deduplication
             all_violations = list(stable_missing_ppe) if is_stable_violation else []
             for av in action_violations:
-                all_violations.append(f"action:{av.get('action', 'unknown')}")
+                action_name = canonicalize_danger_event_key(
+                    str(av.get("action", "unknown"))
+                )
+                if action_name:
+                    all_violations.append(f"action:{action_name}")
+            all_violations = canonicalize_danger_event_values(all_violations)
 
             # Capture active violation state BEFORE dedup (to detect expansions)
             active_before = self.dedup_manager.get_active_violation(
@@ -362,10 +443,11 @@ class PersistenceManager:
                 elif isinstance(final_ppe, list):
                     # Backward compatibility: if it's still a list, separate them
                     for item in final_ppe:
-                        if item.startswith("action:"):
-                            final_actions_list.append(item.replace("action:", ""))
+                        normalized_item = canonicalize_danger_event_key(item)
+                        if normalized_item.startswith("action:"):
+                            final_actions_list.append(normalized_item.replace("action:", ""))
                         else:
-                            final_ppe_list.append(item)
+                            final_ppe_list.append(normalized_item)
 
                 await self.event_service.close_event(
                     event_id=ended_event_id,
@@ -399,7 +481,7 @@ class PersistenceManager:
                     violation for violation in stable_missing_ppe if violation in alertable_violations
                 ]
                 alertable_action_violation_names = [
-                    violation.replace("action:", "")
+                    canonicalize_danger_event_key(violation.replace("action:", ""))
                     for violation in alertable_violations
                     if violation.startswith("action:")
                 ]

@@ -11,8 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..deps import get_database
 from ...core.danger_events import (
     PERSONNEL_SELECTABLE_EVENT_TYPES,
+    canonicalize_danger_event_key,
     get_danger_event_label,
-    normalize_violation_key,
 )
 from ...models.external_person import ExternalPerson
 from ...models.job_title_option import JobTitleOption
@@ -166,7 +166,7 @@ def _parse_supervision_scope(value: Optional[str]) -> list[str]:
         if isinstance(parsed, list):
             result: list[str] = []
             for item in parsed:
-                normalized = normalize_violation_key(str(item))
+                normalized = canonicalize_danger_event_key(str(item))
                 if normalized and normalized not in result:
                     result.append(normalized)
             return result
@@ -175,7 +175,7 @@ def _parse_supervision_scope(value: Optional[str]) -> list[str]:
 
     result = []
     for item in value.split(","):
-        normalized = normalize_violation_key(item)
+        normalized = canonicalize_danger_event_key(item)
         if normalized and normalized not in result:
             result.append(normalized)
     return result
@@ -184,7 +184,7 @@ def _parse_supervision_scope(value: Optional[str]) -> list[str]:
 def _encode_supervision_scope(values: list[str]) -> str:
     unique_values: list[str] = []
     for value in values:
-        normalized = normalize_violation_key(value)
+        normalized = canonicalize_danger_event_key(value)
         if normalized and normalized not in unique_values:
             unique_values.append(normalized)
     return json.dumps(unique_values, ensure_ascii=False)

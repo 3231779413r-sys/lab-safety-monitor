@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.7
 FROM node:22-slim AS base
 WORKDIR /app
 ENV PNPM_HOME=/pnpm
@@ -7,8 +6,7 @@ RUN corepack enable
 
 FROM base AS deps
 COPY package.json pnpm-lock.yaml .npmrc ./
-RUN --mount=type=cache,target=/pnpm/store \
-    pnpm install --frozen-lockfile
+RUN pnpm install --frozen-lockfile
 
 FROM base AS builder
 ARG NEXT_PUBLIC_API_URL=

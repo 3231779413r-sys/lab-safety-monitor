@@ -12,6 +12,8 @@ from typing import Dict, List, Any, Set, Optional
 from dataclasses import dataclass
 from datetime import datetime
 
+from ..core.danger_events import canonicalize_danger_event_key, normalize_violation_key
+
 logger = logging.getLogger(__name__)
 
 
@@ -41,6 +43,7 @@ class TemporalFilter:
         self,
         buffer_size: int = 3,
         min_frames_for_violation: int = 2,
+        min_frames_by_type: Optional[Dict[str, int]] = None,
         min_frames_for_clear: int = 3,
         fusion_strategy: str = "ema",
         ema_alpha: float = 0.7,
@@ -57,6 +60,10 @@ class TemporalFilter:
         """
         self.buffer_size = buffer_size
         self.min_frames = min_frames_for_violation
+        self.min_frames_by_type = {
+            normalize_violation_key(key): max(1, int(value))
+            for key, value in (min_frames_by_type or {}).items()
+        }
         self.min_frames_clear = min_frames_for_clear
         self.fusion_strategy = fusion_strategy
         self.ema_alpha = ema_alpha
@@ -81,6 +88,20 @@ class TemporalFilter:
         # Track consecutive frames without violation for hysteresis
         self.clear_counter: Dict[str, int] = defaultdict(int)
 
+    def _required_frames(self, violation_type: str) -> int:
+        normalized = canonicalize_danger_event_key(violation_type)
+        return self.min_frames_by_type.get(normalized, self.min_frames)
+
+    @staticmethod
+    def _canonical_confidence_key(key: str) -> str:
+        normalized = normalize_violation_key(key)
+        if not normalized:
+            return ""
+        if normalized.startswith("no_"):
+            base_key = canonicalize_danger_event_key(normalized[3:])
+            return f"no_{base_key}" if base_key else ""
+        return canonicalize_danger_event_key(normalized)
+
     def update(self, person_id: str, missing_ppe: List[str]) -> Dict[str, Any]:
         """
         Update the filter with new detection results (binary mode).
@@ -95,26 +116,25 @@ class TemporalFilter:
                 - stable_missing_ppe: PPE that's been missing consistently
                 - violation_duration: How many frames the violation has persisted
         """
-        missing_set = set(missing_ppe)
+        missing_set = {
+            canonicalize_danger_event_key(item)
+            for item in missing_ppe
+            if canonicalize_danger_event_key(item)
+        }
 
         # Add to history
         self.violation_history[person_id].append(missing_set)
         history = self.violation_history[person_id]
 
-        # Need enough history
-        if len(history) < self.min_frames:
-            logger.debug(
-                f"Temporal filter: insufficient history for {person_id} "
-                f"({len(history)} < {self.min_frames} frames)"
-            )
-            return {
-                "is_violation": False,
-                "stable_missing_ppe": [],
-                "violation_duration": 0,
-            }
-
-        # Find PPE that's been missing in all recent frames
-        stable_missing = set.intersection(*list(history))
+        stable_missing: Set[str] = set()
+        recent_history = list(history)
+        candidate_keys = set().union(*recent_history) if recent_history else set()
+        for key in candidate_keys:
+            required = self._required_frames(key)
+            if len(recent_history) < required:
+                continue
+            if all(key in frame_missing for frame_missing in recent_history[-required:]):
+                stable_missing.add(key)
 
         now = datetime.now()
 
@@ -138,7 +158,7 @@ class TemporalFilter:
 
             return {
                 "is_violation": True,
-                "stable_missing_ppe": list(stable_missing),
+                "stable_missing_ppe": sorted(stable_missing),
                 "violation_duration": self.active_violations[person_id].frame_count,
             }
         else:
@@ -155,7 +175,7 @@ class TemporalFilter:
                     )
                     return {
                         "is_violation": True,
-                        "stable_missing_ppe": list(self.active_violations[person_id].missing_ppe),
+                        "stable_missing_ppe": sorted(self.active_violations[person_id].missing_ppe),
                         "violation_duration": self.active_violations[person_id].frame_count,
                     }
                 else:
@@ -189,21 +209,13 @@ class TemporalFilter:
                 - violation_duration: How many frames the violation has persisted
         """
         # Add to confidence history
-        self.confidence_history[person_id].append(detection_confidence)
+        normalized_confidence = {
+            normalized_key: float(value)
+            for key, value in detection_confidence.items()
+            if (normalized_key := self._canonical_confidence_key(key))
+        }
+        self.confidence_history[person_id].append(normalized_confidence)
         history = self.confidence_history[person_id]
-
-        # Need enough history for fusion
-        if len(history) < self.min_frames:
-            logger.debug(
-                f"Temporal filter: insufficient confidence history for {person_id} "
-                f"({len(history)} < {self.min_frames} frames)"
-            )
-            return {
-                "is_violation": False,
-                "stable_missing_ppe": [],
-                "fused_confidence": {},
-                "violation_duration": 0,
-            }
 
         # Compute fused confidence for each PPE type
         fused = self._compute_fused_confidence(list(history))
@@ -212,10 +224,20 @@ class TemporalFilter:
         # Extract missing PPE based on fused confidence
         # Keys starting with "no_" indicate violations
         stable_missing = []
+        recent_history = list(history)
         for key, conf in fused.items():
-            if key.startswith("no_") and conf >= self.confidence_threshold:
-                # Extract PPE name from "no_<ppe_type>" format
-                ppe_name = key[3:]  # Remove "no_" prefix
+            if not key.startswith("no_"):
+                continue
+            ppe_name = canonicalize_danger_event_key(key[3:])
+            required = self._required_frames(ppe_name)
+            if len(recent_history) < required:
+                continue
+            recent_values = [
+                frame_conf.get(key, 0.0) for frame_conf in recent_history[-required:]
+            ]
+            if conf >= self.confidence_threshold and all(
+                value >= self.confidence_threshold for value in recent_values
+            ):
                 stable_missing.append(ppe_name)
 
         now = datetime.now()
@@ -240,7 +262,7 @@ class TemporalFilter:
 
             return {
                 "is_violation": True,
-                "stable_missing_ppe": stable_missing,
+                "stable_missing_ppe": sorted(stable_missing),
                 "fused_confidence": fused,
                 "violation_duration": self.active_violations[person_id].frame_count,
             }
@@ -258,7 +280,7 @@ class TemporalFilter:
                     )
                     return {
                         "is_violation": True,
-                        "stable_missing_ppe": list(self.active_violations[person_id].missing_ppe),
+                        "stable_missing_ppe": sorted(self.active_violations[person_id].missing_ppe),
                         "fused_confidence": fused,
                         "violation_duration": self.active_violations[person_id].frame_count,
                     }
@@ -358,11 +380,20 @@ def get_temporal_filter() -> TemporalFilter:
     if _filter is None:
         from ..core.config import settings
 
+        min_frames_by_type = getattr(
+            settings, "TEMPORAL_VIOLATION_MIN_FRAMES_BY_TYPE", {}
+        ) or {}
+        required_buffer_size = max(
+            [int(settings.TEMPORAL_BUFFER_SIZE), int(getattr(settings, "TEMPORAL_VIOLATION_MIN_FRAMES", 2))]
+            + [max(1, int(value)) for value in min_frames_by_type.values()]
+        )
+
         _filter = TemporalFilter(
-            buffer_size=settings.TEMPORAL_BUFFER_SIZE,
+            buffer_size=required_buffer_size,
             min_frames_for_violation=getattr(
                 settings, "TEMPORAL_VIOLATION_MIN_FRAMES", 2
             ),
+            min_frames_by_type=min_frames_by_type,
             min_frames_for_clear=getattr(
                 settings, "TEMPORAL_VIOLATION_MIN_FRAMES_CLEAR", 3
             ),

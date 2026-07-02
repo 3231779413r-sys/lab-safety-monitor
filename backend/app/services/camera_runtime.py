@@ -135,6 +135,7 @@ class PendingProcessingTask:
     identity_observations_override: Optional[dict[str, Any]]
     processed_at: datetime
     telemetry: TelemetryMap
+    enqueued_at_monotonic: float
 
 
 @dataclass
@@ -362,6 +363,7 @@ class CameraRuntime:
         self._processing_queue: Queue[PendingProcessingTask] = Queue(
             maxsize=max(1, int(settings.CAMERA_RUNTIME_PROCESS_QUEUE_SIZE))
         )
+        self._pending_processing_task: PendingProcessingTask | None = None
         self._processing_scheduled = False
         self._result_dispatch_scheduled = False
         self._metrics_window_size = max(
@@ -393,6 +395,7 @@ class CameraRuntime:
         self._inference_backpressure_skip_count = 0
         self._replaced_pending_oldest_count = 0
         self._replaced_pending_latest_count = 0
+        self._processing_replaced_latest_count = 0
         self._submit_queue_reject_count = 0
         self._identity_requests_submitted = 0
         self._identity_requests_skipped = 0
@@ -905,6 +908,15 @@ class CameraRuntime:
                     self._latest_raw_jpeg = bytes(encoded)
         return encoded
 
+    def latest_frame_snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "frame": self._latest_frame.copy() if self._latest_frame is not None else None,
+                "raw_jpeg": bytes(self._latest_raw_jpeg) if self._latest_raw_jpeg is not None else None,
+                "frame_version": self._latest_frame_version,
+                "last_frame_at": self.status.last_frame_at,
+            }
+
     def snapshot_status(self) -> dict:
         return {
             "camera_id": self.status.camera_id,
@@ -988,6 +1000,7 @@ class CameraRuntime:
             "replaced_pending_count": self._replaced_pending_oldest_count + self._replaced_pending_latest_count,
             "replaced_pending_oldest_count": self._replaced_pending_oldest_count,
             "replaced_pending_latest_count": self._replaced_pending_latest_count,
+            "processing_replaced_latest_count": self._processing_replaced_latest_count,
             "submit_queue_reject_count": self._submit_queue_reject_count,
             "identity_requests_submitted": self._identity_requests_submitted,
             "identity_requests_skipped": self._identity_requests_skipped,
@@ -2597,30 +2610,61 @@ class CameraRuntime:
             identity_observations_override=identity_observations_override,
             processed_at=processed_at,
             telemetry=mark_telemetry(telemetry, "processing_enqueued_at"),
+            enqueued_at_monotonic=time.monotonic(),
         )
-        try:
-            self._processing_queue.put_nowait(task)
-        except Full:
-            if frame_path:
-                task.telemetry = self._delete_shared_frame(
-                    frame_path,
-                    reason="processing_queue_full",
+        latest_only_mode = bool(getattr(settings, "CAMERA_RUNTIME_LATEST_ONLY_MODE", True))
+        dropped_task: PendingProcessingTask | None = None
+        if latest_only_mode:
+            with self._lock:
+                dropped_task = self._pending_processing_task
+                self._pending_processing_task = task
+        else:
+            try:
+                self._processing_queue.put_nowait(task)
+            except Full:
+                if frame_path:
+                    task.telemetry = self._delete_shared_frame(
+                        frame_path,
+                        reason="processing_queue_full",
+                        telemetry=task.telemetry,
+                    )
+                self.status.dropped_frames += 1
+                self._log_frame_timing(
+                    stage="processing_dropped",
+                    request_id=request_id,
                     telemetry=task.telemetry,
+                )
+                logger.debug(
+                    "Dropping processing task for camera %s because processing queue is full",
+                    self.camera_id,
+                )
+                return
+        if dropped_task is not None:
+            self._processing_replaced_latest_count += 1
+            if dropped_task.frame_path:
+                dropped_task.telemetry = self._delete_shared_frame(
+                    dropped_task.frame_path,
+                    reason="processing_replaced_latest",
+                    telemetry=dropped_task.telemetry,
                 )
             self.status.dropped_frames += 1
             self._log_frame_timing(
-                stage="processing_dropped",
-                request_id=request_id,
-                telemetry=task.telemetry,
+                stage="processing_replaced_latest",
+                request_id=dropped_task.request_id,
+                telemetry=dropped_task.telemetry,
             )
-            logger.debug(
-                "Dropping processing task for camera %s because processing queue is full",
-                self.camera_id,
-            )
-            return
         self._registry.schedule_processing(self.camera_id)
 
     def _clear_processing_queue(self) -> None:
+        with self._lock:
+            latest_pending = self._pending_processing_task
+            self._pending_processing_task = None
+        if latest_pending and latest_pending.frame_path:
+            self._delete_shared_frame(
+                latest_pending.frame_path,
+                reason="processing_queue_cleared",
+                telemetry=latest_pending.telemetry,
+            )
         while True:
             try:
                 task = self._processing_queue.get_nowait()
@@ -2640,10 +2684,18 @@ class CameraRuntime:
         self._registry.clear_identity_submit_queue(self.camera_id)
 
     def _process_next_queued_task(self) -> bool:
-        try:
-            task = self._processing_queue.get_nowait()
-        except Empty:
-            return False
+        latest_only_mode = bool(getattr(settings, "CAMERA_RUNTIME_LATEST_ONLY_MODE", True))
+        if latest_only_mode:
+            with self._lock:
+                task = self._pending_processing_task
+                self._pending_processing_task = None
+            if task is None:
+                return False
+        else:
+            try:
+                task = self._processing_queue.get_nowait()
+            except Empty:
+                return False
         try:
             frame = task.frame
             if frame is None and task.frame_path:
@@ -3304,6 +3356,11 @@ class CameraRuntimeRegistry:
             "identity_submit_mailboxes": len(self._identity_submit_mailboxes),
             "processing_ready_queue": self._processing_ready_queue.qsize(),
             "result_ready_queue": self._result_ready_queue.qsize(),
+            "processing_pending_cameras": sum(
+                1
+                for runtime in self._runtimes.values()
+                if runtime._pending_processing_task is not None
+            ),
         }
         capacity_warning = (
             len(hot_cameras) >= 2
@@ -3622,7 +3679,13 @@ class CameraRuntimeRegistry:
             with runtime._lock:
                 runtime._processing_scheduled = False
             return
-        if not runtime._processing_queue.empty():
+        latest_only_mode = bool(getattr(settings, "CAMERA_RUNTIME_LATEST_ONLY_MODE", True))
+        has_pending_processing = (
+            runtime._pending_processing_task is not None
+            if latest_only_mode
+            else not runtime._processing_queue.empty()
+        )
+        if has_pending_processing:
             try:
                 self._processing_ready_queue.put_nowait(camera_id)
                 return
@@ -3633,7 +3696,11 @@ class CameraRuntimeRegistry:
                 )
         with runtime._lock:
             runtime._processing_scheduled = False
-            needs_reschedule = not runtime._processing_queue.empty()
+            needs_reschedule = (
+                runtime._pending_processing_task is not None
+                if latest_only_mode
+                else not runtime._processing_queue.empty()
+            )
         if needs_reschedule:
             self.schedule_processing(camera_id)
 

@@ -94,7 +94,7 @@ class Settings(BaseSettings):
     # Detector settings
     DETECTOR_TYPE: str = Field(default="hybrid")
     DETECTION_CONFIDENCE_THRESHOLD: float = 0.5
-    PERSON_MIN_BOX_AREA_RATIO: float = 0.14
+    PERSON_MIN_BOX_AREA_RATIO: float = 0.015
     VIOLATION_CONFIDENCE_THRESHOLD: float = 0.3
     FACE_RECOGNITION_THRESHOLD: float = 0.45
     FACE_RECOGNITION_MIN_DETECTION_SCORE: float = 0.6
@@ -155,6 +155,9 @@ class Settings(BaseSettings):
     FRAME_SAMPLE_RATE: int = 10
     TEMPORAL_BUFFER_SIZE: int = 3
     TEMPORAL_VIOLATION_MIN_FRAMES: int = 2
+    TEMPORAL_VIOLATION_MIN_FRAMES_BY_TYPE: Dict[str, int] = Field(
+        default={"hardhat": 4}
+    )
     TEMPORAL_VIOLATION_MIN_FRAMES_CLEAR: int = 3  # Frames without violation to clear (hysteresis)
     TEMPORAL_FUSION_STRATEGY: str = Field(default="ema")
     TEMPORAL_EMA_ALPHA: float = Field(default=0.7)
@@ -265,6 +268,7 @@ class Settings(BaseSettings):
     LOGS_DIR: Optional[Path] = None
     LIVE_PREVIEW_DIR: Optional[Path] = None
     ENABLE_SNAPSHOT_CAPTURE: bool = True
+    ENABLE_PERSON_DATASET_CAPTURE: bool = True
     YOLOV11_MODEL_PATH: Optional[Path] = None
 
     # MinIO snapshot storage
@@ -274,6 +278,7 @@ class Settings(BaseSettings):
     MINIO_BUCKET: str = "lab-safety-monitor"
     MINIO_VIDEO_BUCKET: str = "lab-safety-videos"
     MINIO_FACE_BUCKET: str = "lab-safety-faces"
+    MINIO_PERSON_DATASET_BUCKET: str = "lab-safety-person-dataset"
     MINIO_SECURE: bool = False
     MINIO_PRESIGNED_EXPIRE_SECONDS: int = 3600
 

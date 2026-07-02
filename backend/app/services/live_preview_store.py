@@ -23,6 +23,8 @@ class _PreviewPublishState:
     raw_signature: tuple[int, int] | None = None
     people_payload: str | None = None
     status_payload: str | None = None
+    placeholder_payload: str | None = None
+    placeholder_published_at: float = 0.0
 
 
 class LivePreviewStore:
@@ -42,6 +44,12 @@ class LivePreviewStore:
             return path.read_bytes()
         except OSError:
             return None
+
+    def read_placeholder(self, camera_id: str) -> bytes | None:
+        return self._read_bytes(self._placeholder_path(camera_id))
+
+    def write_placeholder(self, camera_id: str, payload: bytes) -> None:
+        self._write_bytes_atomic(self._placeholder_path(camera_id), payload)
 
     def read_people(self, camera_id: str) -> dict[str, Any] | None:
         return self._read_json(self._people_path(camera_id))
@@ -68,6 +76,7 @@ class LivePreviewStore:
             "annotated_write_ms": 0.0,
             "people_write_ms": 0.0,
             "status_write_ms": 0.0,
+            "placeholder_write_ms": 0.0,
             "raw_bytes": 0,
             "annotated_bytes": len(annotated_jpeg or b""),
             "publish_skipped": 0,
@@ -142,6 +151,9 @@ class LivePreviewStore:
     def _status_path(self, camera_id: str) -> Path:
         return self._camera_dir(camera_id) / "status.json"
 
+    def _placeholder_path(self, camera_id: str) -> Path:
+        return self._camera_dir(camera_id) / "placeholder.jpg"
+
     def _encode_jpeg(self, frame: np.ndarray) -> bytes | None:
         ok, encoded = cv2.imencode(
             ".jpg",
@@ -158,6 +170,14 @@ class LivePreviewStore:
         try:
             return json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
+            return None
+
+    def _read_bytes(self, path: Path) -> bytes | None:
+        if not path.exists():
+            return None
+        try:
+            return path.read_bytes()
+        except OSError:
             return None
 
     def _write_json_atomic(self, path: Path, payload: dict[str, Any]) -> None:

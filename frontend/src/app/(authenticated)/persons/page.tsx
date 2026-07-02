@@ -105,6 +105,7 @@ const FALLBACK_SUPERVISION_EVENTS: SupervisionEventOption[] = [
   { key: "hardhat", label: "未佩戴安全帽" },
   { key: "mask", label: "未佩戴口罩" },
   { key: "safety_vest", label: "未穿戴安全背心" },
+  { key: "work_clothes", label: "未穿工作服" },
   { key: "safety_shoes", label: "未穿戴防护鞋" },
   { key: "gloves", label: "未佩戴防护手套" },
   { key: "goggles", label: "未佩戴护目镜" },

@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from typing import Optional
+from uuid import uuid4
 
 import cv2
 from minio import Minio
@@ -26,6 +27,7 @@ class MinioStorage:
         self.bucket = settings.MINIO_BUCKET
         self.video_bucket = settings.MINIO_VIDEO_BUCKET
         self.face_bucket = settings.MINIO_FACE_BUCKET
+        self.dataset_bucket = settings.MINIO_PERSON_DATASET_BUCKET
         self.client = Minio(
             settings.MINIO_ENDPOINT,
             access_key=settings.MINIO_ACCESS_KEY,
@@ -70,28 +72,45 @@ class MinioStorage:
             f"{camera}/{event_id}.mp4"
         )
 
+    def build_person_dataset_key(
+        self,
+        *,
+        timestamp: datetime,
+        camera_id: Optional[str],
+        frame_number: Optional[int] = None,
+    ) -> str:
+        env = settings.APP_ENV.strip("/") or "dev"
+        camera = (camera_id or "unknown_camera").strip("/") or "unknown_camera"
+        frame_part = f"_f{int(frame_number):06d}" if frame_number is not None else ""
+        return (
+            f"person-dataset/{env}/{timestamp:%Y/%m/%d}/"
+            f"{camera}/{timestamp:%Y%m%d_%H%M%S_%f}{frame_part}_{uuid4().hex[:8]}.jpg"
+        )
+
     def upload_jpeg_frame(
         self,
         frame,
         *,
         object_key: str,
+        bucket: Optional[str] = None,
         quality: int = 85,
     ) -> StoredObject:
-        self.ensure_bucket(self.bucket)
+        target_bucket = bucket or self.bucket
+        self.ensure_bucket(target_bucket)
         ok, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
         if not ok:
             raise RuntimeError("Failed to encode snapshot frame as JPEG")
 
         payload = buffer.tobytes()
         self.client.put_object(
-            self.bucket,
+            target_bucket,
             object_key,
             BytesIO(payload),
             length=len(payload),
             content_type="image/jpeg",
         )
         return StoredObject(
-            bucket=self.bucket,
+            bucket=target_bucket,
             object_key=object_key,
             content_type="image/jpeg",
             size_bytes=len(payload),

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from dataclasses import dataclass
 from typing import Optional
 
 import cv2
@@ -16,7 +17,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.config import settings
 from ...core.database import async_session
-from ...core.danger_events import get_danger_event_label, normalize_violation_key
+from ...core.danger_events import (
+    canonicalize_danger_event_key,
+    get_danger_event_label,
+)
 from ...ml.face_recognition import FaceRecognizer
 from ...models.external_person import ExternalPerson
 from ...models.person import Person
@@ -47,10 +51,23 @@ import logging
 router = APIRouter(prefix="/cameras", tags=["cameras"])
 logger = logging.getLogger(__name__)
 
+
+@dataclass
+class _PreviewReadCacheEntry:
+    payload: bytes
+    cached_at: float
+    kind: str
+
+
+_PREVIEW_READ_CACHE: dict[tuple[str, str], _PreviewReadCacheEntry] = {}
+_PREVIEW_READ_CACHE_TTL_SECONDS = 0.45
+_PREVIEW_PLACEHOLDER_TTL_SECONDS = 3.0
+
 CAMERA_DETECTION_EVENT_OPTIONS = [
     {"key": "hardhat", "label": "未佩戴安全帽"},
     {"key": "mask", "label": "未佩戴口罩"},
     {"key": "safety_vest", "label": "未穿戴安全背心"},
+    {"key": "work_clothes", "label": "未穿工作服"},
     {"key": "safety_shoes", "label": "未穿戴防护鞋"},
     {"key": "gloves", "label": "未佩戴防护手套"},
     {"key": "goggles", "label": "未佩戴护目镜"},
@@ -96,7 +113,58 @@ def _get_live_preview_cache():
     return get_live_preview_store()
 
 
+def _preview_cache_key(camera_id: str, kind: str) -> tuple[str, str]:
+    return camera_id, kind
+
+
+def _read_cached_preview(camera_id: str, kind: str) -> tuple[bytes | None, bool]:
+    cache_key = _preview_cache_key(camera_id, kind)
+    now = time.perf_counter()
+    cached = _PREVIEW_READ_CACHE.get(cache_key)
+    if cached and now - cached.cached_at <= _PREVIEW_READ_CACHE_TTL_SECONDS:
+        return cached.payload, True
+    payload = _get_live_preview_cache().read_frame(camera_id, raw=kind == "raw")
+    if payload is None:
+        return None, False
+    _PREVIEW_READ_CACHE[cache_key] = _PreviewReadCacheEntry(
+        payload=payload,
+        cached_at=now,
+        kind=kind,
+    )
+    return payload, False
+
+
+def _read_runtime_latest_preview(camera_id: str, *, raw: bool) -> bytes | None:
+    try:
+        return _get_camera_runtime_registry().get_latest_frame_jpeg(camera_id, raw=raw)
+    except Exception:
+        logger.exception("Failed to read runtime latest preview for camera %s", camera_id)
+        return None
+
+
+def _cache_placeholder(camera_id: str, payload: bytes) -> bytes:
+    cache_key = _preview_cache_key(camera_id, "placeholder")
+    now = time.perf_counter()
+    cached = _PREVIEW_READ_CACHE.get(cache_key)
+    if cached and now - cached.cached_at <= _PREVIEW_PLACEHOLDER_TTL_SECONDS:
+        return cached.payload
+    _PREVIEW_READ_CACHE[cache_key] = _PreviewReadCacheEntry(
+        payload=payload,
+        cached_at=now,
+        kind="placeholder",
+    )
+    return payload
+
+
+def _preview_endpoint_name(endpoint: str, *, raw: bool = False) -> str:
+    suffix = "raw" if raw else "annotated"
+    return f"{endpoint}_{suffix}"
+
+
 def _build_preview_placeholder(camera_id: str, *, detail: str | None = None) -> bytes:
+    cached_placeholder = _get_live_preview_cache().read_placeholder(camera_id)
+    if cached_placeholder is not None:
+        return _cache_placeholder(camera_id, cached_placeholder)
     frame = np.zeros((480, 640, 3), dtype=np.uint8)
     message = detail or f"Camera {camera_id} preview unavailable"
     cv2.putText(
@@ -111,7 +179,12 @@ def _build_preview_placeholder(camera_id: str, *, detail: str | None = None) -> 
     ok, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
     if not ok:
         raise HTTPException(status_code=500, detail="Failed to build preview placeholder")
-    return buffer.tobytes()
+    payload = buffer.tobytes()
+    try:
+        _get_live_preview_cache().write_placeholder(camera_id, payload)
+    except Exception:
+        pass
+    return _cache_placeholder(camera_id, payload)
 
 
 def _build_manual_preview_error_frame() -> bytes:
@@ -231,19 +304,24 @@ def _parse_scope(value: Optional[str]) -> list[str]:
         if isinstance(parsed, list):
             result: list[str] = []
             for item in parsed:
-                normalized = normalize_violation_key(str(item))
+                normalized = canonicalize_danger_event_key(str(item))
                 if normalized and normalized not in result:
                     result.append(normalized)
             return result
     except json.JSONDecodeError:
         pass
-    return [normalize_violation_key(item) for item in value.split(",") if normalize_violation_key(item)]
+    result: list[str] = []
+    for item in value.split(","):
+        normalized = canonicalize_danger_event_key(item)
+        if normalized and normalized not in result:
+            result.append(normalized)
+    return result
 
 
 def _encode_scope(values: list[str]) -> str:
     unique_values: list[str] = []
     for value in values:
-        normalized = normalize_violation_key(value)
+        normalized = canonicalize_danger_event_key(value)
         if normalized and normalized not in unique_values:
             unique_values.append(normalized)
     return json.dumps(unique_values, ensure_ascii=False)
@@ -902,31 +980,44 @@ async def live_camera_feed(
         frame_index = 0
         while True:
             loop_started_at = time.perf_counter()
-            frame_bytes = preview_cache.read_frame(camera_id, raw=raw)
+            frame_bytes = _read_runtime_latest_preview(camera_id, raw=raw)
+            source = "runtime"
+            cache_hit = False
+            if frame_bytes is None:
+                frame_bytes, cache_hit = _read_cached_preview(camera_id, "raw" if raw else "annotated")
+                source = "cache"
             read_ms = round((time.perf_counter() - loop_started_at) * 1000.0, 1)
             placeholder = False
             if frame_bytes is None:
+                status_started_at = time.perf_counter()
                 status = preview_cache.read_status(camera_id) or {}
+                status_read_ms = round((time.perf_counter() - status_started_at) * 1000.0, 1)
                 detail = status.get("status") or "preview unavailable"
                 frame_bytes = _build_preview_placeholder(camera_id, detail=detail)
                 placeholder = True
+                source = "placeholder"
+            else:
+                status_read_ms = 0.0
             frame_index += 1
             if placeholder or read_ms >= 20.0 or frame_index % 100 == 0:
                 logger.info(
                     "PREVIEW_API_TIMING %s",
                     json.dumps(
-                        {
-                            "camera_id": camera_id,
-                            "endpoint": "live_feed",
-                            "raw": raw,
-                            "frame_index": frame_index,
-                            "read_ms": read_ms,
-                            "bytes": len(frame_bytes),
-                            "placeholder": placeholder,
-                        },
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    ),
+                            {
+                                "camera_id": camera_id,
+                                "endpoint": _preview_endpoint_name("live_feed", raw=raw),
+                                "raw": raw,
+                                "frame_index": frame_index,
+                                "read_ms": read_ms,
+                                "status_read_ms": status_read_ms,
+                                "bytes": len(frame_bytes),
+                                "placeholder": placeholder,
+                                "cache_hit": cache_hit,
+                                "source": source,
+                            },
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
                 )
             yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n"
             await asyncio.sleep(delay)
@@ -939,6 +1030,8 @@ async def live_camera_feed(
 
 @router.get("/{camera_id}/live/people", response_model=LivePersonOverlayResponse)
 async def get_live_camera_people(camera_id: str):
+    read_started_at = time.perf_counter()
+    cache_hit = False
     if worker_proxy_enabled():
         try:
             payload = await request_worker_json("GET", f"/internal/cameras/{camera_id}/live/people")
@@ -948,6 +1041,23 @@ async def get_live_camera_people(camera_id: str):
         payload = _get_live_preview_cache().read_people(camera_id)
         if payload is None:
             payload = _get_camera_runtime_registry().get_latest_person_overlays(camera_id)
+        else:
+            cache_hit = True
+    read_ms = round((time.perf_counter() - read_started_at) * 1000.0, 1)
+    logger.info(
+        "PREVIEW_API_TIMING %s",
+        json.dumps(
+            {
+                "camera_id": camera_id,
+                "endpoint": "live_people",
+                "read_ms": read_ms,
+                "cache_hit": cache_hit,
+                "person_count": len((payload or {}).get("persons", [])),
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
+    )
     return LivePersonOverlayResponse(**payload)
 
 
@@ -993,24 +1103,31 @@ async def get_live_camera_frame_image(
         _get_camera_runtime_registry().start_camera(camera)
 
     read_started_at = time.perf_counter()
-    frame_bytes = _get_live_preview_cache().read_frame(camera_id, raw=raw)
+    frame_bytes = _read_runtime_latest_preview(camera_id, raw=raw)
+    source = "runtime"
+    cache_hit = False
+    if frame_bytes is None:
+        frame_bytes, cache_hit = _read_cached_preview(camera_id, "raw" if raw else "annotated")
+        source = "cache"
     read_ms = round((time.perf_counter() - read_started_at) * 1000.0, 1)
     if frame_bytes is None:
         raise HTTPException(status_code=404, detail="Frame not available")
     logger.info(
         "PREVIEW_API_TIMING %s",
         json.dumps(
-            {
-                "camera_id": camera_id,
-                "endpoint": "live_frame_raw" if raw else "live_frame",
-                "read_ms": read_ms,
-                "bytes": len(frame_bytes),
-                "placeholder": False,
-            },
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ),
-    )
+                {
+                    "camera_id": camera_id,
+                    "endpoint": _preview_endpoint_name("live_frame", raw=raw),
+                    "read_ms": read_ms,
+                    "bytes": len(frame_bytes),
+                    "placeholder": False,
+                    "cache_hit": cache_hit,
+                    "source": source,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        )
     return Response(content=frame_bytes, media_type="image/jpeg")
 
 

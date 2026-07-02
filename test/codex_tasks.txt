@@ -1,203 +1,154 @@
 Codex 修改任务清单
 ====================
 
-更新时间：2026-06-24
+更新时间：2026-07-01
 
 目标
 ----
-确保多相机场景下“始终处理最新帧、稳定低延迟、可观测”，而不是当前这种经常回压跳帧、身份链路拖慢、热点相机抖动降级的状态。
+围绕“命名统一、画面预览、检测推理”三条主线，给出可执行优化清单，优先解决误报、卡顿、传输延迟和链路不一致问题。
 
 工作要求
 --------
 1. 先审阅并理解以下关键文件，再开始改：
-- `backend/app/services/camera_runtime.py`
-- `backend/app/services/inference_broker.py`
-- `backend/app/services/identity_broker.py`
-- `backend/app/inference_batch_worker.py`
-- `backend/app/identity_batch_worker.py`
-- `backend/app/ml/pipeline.py`
-- `.env.docker`
-- `docker-compose.yml`
+- `backend/app/core/danger_events.py`
+- `backend/app/ml/yolov11_detector.py`
+- `backend/app/ml/temporal_filter.py`
+- `backend/app/services/persistence.py`
+- `backend/app/api/routes/cameras.py`
+- `frontend/src/lib/formatters.ts`
+- `frontend/src/app/(authenticated)/cameras/page.tsx`
+- `frontend/src/app/(authenticated)/events/page.tsx`
+- `frontend/src/app/(authenticated)/persons/page.tsx`
 
 2. 修改时遵守这些原则：
-- 优先修根因，不要做表面 patch
+- 先统一 canonical key，再做别名兼容
 - 不要破坏现有 API/前端接口
-- 保持现有日志风格
+- 预览链路优先降频、缓存和节流
+- 推理链路优先减少误报和尾延迟
 - 所有改动尽量局部、可回滚
 - 改完后给出验证步骤和建议配置
-- 如果需要新增配置项，请同时更新 `backend/app/core/config.py`、`.env.docker`、`docker-compose.yml`
 
 3. 重点问题背景（需要针对性修复）：
-- 当前每相机待推理帧上限过低，`INFERENCE_MAX_PENDING_FRAMES_PER_CAMERA=1`，导致大量 `Skipping inference sample...`
-- 当前回压策略是“拒绝新帧”，不是“保留最新帧覆盖旧帧”
-- inference/identity 总时延高，主要瓶颈是排队等待，不是纯模型计算
-- identity 链路会重新编码整帧 JPEG，增加 CPU 和等待
-- batch worker 当前会混合多摄像头帧，热点相机会拖累普通相机
-- 自动 degrade level 在 0/1/2 之间频繁抖动
-- broker 发布接口当前没有可靠等待 publish 成功，存在 silent failure 风险
-- 需要增强实时性指标，证明系统真的在“处理最新帧”
+- 现在存在 hardhat / hard_hat、safety_vest / vest、work_clothes 等命名不一致
+- 前端筛选、后端归一化、历史数据标签存在混用风险
+- 预览请求频率偏高，多个页面容易同时拉同一帧，造成带宽和 CPU 压力
+- 推理日志里有持续的 frame timing 波动，说明瓶颈更像链路抖动和队列等待，不是单纯模型计算
+- temporal filter 的按类型连续帧门槛需要和 buffer 语义一致
+- dataset/存储型后处理可能把主推理链路拖长
 
 P0：必须先完成
 ================
 
-任务 P0-1：把每相机推理提交队列改成 latest-frame mailbox 语义
+任务 P0-1：统一命名和别名映射
 目标：
-- 不再使用“backlog 满了就直接跳过新帧”的策略
-- 每个相机始终只保留最新待处理帧；如果旧帧还没发出/还没被处理，可以被新帧覆盖
-- 必须记录：
-  - 被覆盖旧帧次数
-  - 因最新帧替换产生的丢弃次数
-  - 每相机有效处理 FPS
-  - 最新已处理帧年龄 `latest_frame_age_ms`
+- 确保后端 canonical key、前端筛选项、历史数据展示、告警标签完全一致
+- 保留旧 key 兼容，但新写入只使用 canonical key
+- 避免同一违章在不同页面显示成多个名字
 
 重点修改位置：
-- `backend/app/services/camera_runtime.py`
+- `backend/app/core/danger_events.py`
+- `backend/app/ml/yolov11_detector.py`
+- `backend/app/ml/temporal_filter.py`
+- `backend/app/services/persistence.py`
+- `frontend/src/lib/formatters.ts`
+- `frontend/src/app/(authenticated)/cameras/page.tsx`
+- `frontend/src/app/(authenticated)/events/page.tsx`
+- `frontend/src/app/(authenticated)/persons/page.tsx`
 
 具体要求：
-- 重构当前 inference submit / pending 逻辑
-- 保持“低延迟优先”，不要改成无限堆积
-- 如果相机高压，只允许旧帧被更新覆盖，不允许 backlog 无限制增长
-- 日志中明确区分：
-  - `replaced_pending_oldest`
-  - `replaced_pending_latest`
-  - `submit_queue_full`
-  - `processing_dropped`
-- 最终目标是：系统处理“最新状态”，而不是执着于处理所有历史帧
+- 统一 hardhat / hard_hat 只保留一个 canonical key
+- 统一 safety_vest / vest / no_vest 的展示和存储口径
+- 统一 work_clothes 的标签和筛选 key
+- 增加命名回归测试，防止前后端再次分叉
 
-任务 P0-2：修复 RabbitMQ publish 成功语义
+任务 P0-2：降低预览链路卡顿和重复拉取
 目标：
-- `publish_frame()` / `publish_identity_task()` 不能在 coroutine 还没确认执行时就直接返回成功
-- 必须等待 `run_coroutine_threadsafe(...).result(timeout=...)`
-- publish 超时或异常时：
-  - 返回 false
-  - 打日志
-  - 在 runtime 中正确释放共享帧/更新 telemetry
-  - 不允许 silent drop
+- 预览页面不要高频重复请求同一帧
+- 多个页面或组件同时访问时要命中缓存而不是重复读源头
+- 出错回退时不要反复生成高成本 placeholder frame
 
 重点修改位置：
-- `backend/app/services/inference_broker.py`
-- `backend/app/services/identity_broker.py`
-- `backend/app/services/camera_runtime.py`
-
-任务 P0-3：identity 链路改成增量优先
-目标：
-- 只对以下目标做 identity：
-  - 新 track
-  - unknown track
-  - face cache 过期的已识别 track
-- 优先传 crop 或更轻量载荷，不要默认重新编码整帧
-- 如果短时间内 identity 跟不上，主检测结果必须先落地，identity 异步回填即可
-
-重点修改位置：
-- `backend/app/services/camera_runtime.py`
-- `backend/app/identity_batch_worker.py`
-- 如有必要，调整相关 payload 构造文件
+- `backend/app/api/routes/cameras.py`
+- `frontend/src/app/(authenticated)/cameras/page.tsx`
+- 需要的话，连同其它预览入口一起检查
 
 具体要求：
-- 尽量减少整帧 JPEG 二次编码
-- 如果必须保留整帧 fallback，也要优先 crop
-- 增加 identity 实时指标：
-  - `identity_requests_submitted`
-  - `identity_requests_skipped`
-  - `identity_async_merged_count`
-  - `identity_fallback_without_enrichment_count`
+- 预览请求按 raw / annotated / people / status 分层统计
+- 给预览读取加短 TTL 或最近帧缓存
+- 前端拆分列表刷新和预览刷新
+- 对高频失败路径加节流，避免 CPU 被 placeholder 生成吃掉
+
+任务 P0-3：修正检测推理链路的误报和尾延迟
+目标：
+- 减少“正类和反类同时出现”导致的误报
+- temporal filter 的按类型门槛必须与 buffer 语义一致
+- 推理结果在进入存储/持久化前尽量先稳定归一
+
+重点修改位置：
+- `backend/app/ml/yolov11_detector.py`
+- `backend/app/ml/temporal_filter.py`
+- `backend/app/services/persistence.py`
+
+具体要求：
+- 保证正检优先，冲突时抑制反检
+- 对 hardhat 等高门槛事件补足稳定判定
+- dataset 或其它附加上传逻辑不要拖慢主推理路径
 
 P1：性能与稳定性增强
 ====================
 
-任务 P1-1：优化 inference batch 策略
+任务 P1-1：优化预览缓存和刷新策略
 目标：
-- 避免热点相机或高复杂度帧拖慢整批
-- 至少实现以下任一方案，并在说明中写清：
-  - 按复杂度分桶（空帧/低复杂度/高复杂度）
-  - 按相机隔离小批次
-  - 限制单 batch 内高复杂度帧占比
+- 多个页面同时查看时，避免重复拉取同一帧
+- 提高预览命中缓存概率，减少带宽和 CPU 压力
+- 让前端预览节奏更平滑，不因短时抖动频繁刷帧
 
 重点修改位置：
-- `backend/app/inference_batch_worker.py`
+- `backend/app/api/routes/cameras.py`
+- `frontend/src/app/(authenticated)/cameras/page.tsx`
+- `frontend/src/app/(authenticated)/events/page.tsx`
+- `frontend/src/app/(authenticated)/persons/page.tsx`
 
-具体要求：
-- 保留动态 batch 能力
-- 避免为了吞吐把低延迟牺牲掉
-- 输出新的批处理统计：
-  - batch 内相机数
-  - batch 内复杂帧数
-  - batch compute / wait 分布
-  - 每类 bucket 的处理量
-
-任务 P1-2：平滑 degrade 状态机
+任务 P1-2：平滑检测门槛和稳定判定
 目标：
-- 减少 0/1/2 频繁抖动
-- 让 degrade 更稳定、更符合热点相机长期策略
-- 支持对指定相机固定 profile（如 fast / balanced / accurate）
+- 让 temporal filter 的按类型连续帧门槛与 buffer 一致
+- 降低硬帽、背心等高频误报
+- 让稳定违章更符合连续帧语义，而不是偶发噪声
 
 重点修改位置：
-- `backend/app/services/camera_runtime.py`
-- `backend/app/core/config.py`
-- `.env.docker`
-- `docker-compose.yml`
+- `backend/app/ml/temporal_filter.py`
+- `backend/app/ml/yolov11_detector.py`
 
-具体要求：
-- 给 degrade 增加更明确的进入/恢复门限与保持时间
-- 把热点相机推荐和实际 profile 使用情况纳入 summary
-- 对高压相机优先固定成 `fast`，而不是每几秒震荡
-
-任务 P1-3：增强运行时可观测性
+任务 P1-3：解耦存储型后处理
 目标：
-- 证明系统是否真的“实时”
-- 日志和 summary 至少新增以下字段：
-  - `effective_processed_fps`
-  - `latest_frame_age_ms`
-  - `replaced_pending_count`
-  - `submit_queue_reject_count`
-  - `identity_skip_ratio`
-  - `async_identity_merge_latency_ms`
-  - `camera_hotness_score`
+- dataset/额外上传类动作不要拖慢主推理链路
+- 必要时改成异步、采样或事件触发
 
 重点修改位置：
-- `backend/app/services/camera_runtime.py`
+- `backend/app/services/persistence.py`
+- `backend/app/services/object_storage.py`
 
-P2：配置和容量建议
+任务 P1-4：增强运行时可观测性
+目标：
+- 让日志更容易定位卡在预览、推理还是存储
+- 至少保留：预览耗时、推理耗时、持久化耗时、失败回退耗时
+
+重点修改位置：
+- `backend/app/api/routes/cameras.py`
+- `backend/app/services/persistence.py`
+
+P2：验证与部署建议
 ==================
 
-任务 P2-1：补齐配置项
-目标：
-- 为新行为增加合理配置项，并提供默认值
-- 更新：
-  - `backend/app/core/config.py`
-  - `.env.docker`
-  - `docker-compose.yml`
-
-建议新增或重命名的配置（如认为合理可微调名称）：
-- `CAMERA_RUNTIME_LATEST_ONLY_MODE`
-- `CAMERA_RUNTIME_MAX_MAILBOX_FRAMES`
-- `BROKER_PUBLISH_TIMEOUT_SECONDS`
-- `IDENTITY_USE_PERSON_CROPS_FIRST`
-- `IDENTITY_MAX_CROPS_PER_FRAME`
-- `CAMERA_DEGRADE_ENTER_HOLD_SECONDS`
-- `CAMERA_DEGRADE_RECOVER_HOLD_SECONDS`
-- `CAMERA_RUNTIME_HOT_CAMERA_SCORE_THRESHOLD`
-
-任务 P2-2：输出部署调优建议
-目标：
-- 根据当前代码和日志特征，给出推荐值，不要只改代码不说明
-- 至少覆盖：
-  - `CAMERA_MONITOR_SHARD_COUNT`
-  - `CAMERA_RUNTIME_SHARED_SUBMIT_THREADS`
-  - `CAMERA_RUNTIME_SHARED_PROCESSING_WORKERS`
-  - `INFERENCE_BATCH_SIZE`
-  - `INFERENCE_MAX_BATCH_SIZE`
-  - `INFERENCE_MAX_PENDING_FRAMES_PER_CAMERA`
-  - `IDENTITY_BATCH_SIZE`
-  - `IDENTITY_MAX_PENDING_FRAMES_PER_CAMERA`
-  - `LIVE_STREAM_PROCESS_FPS`
-
-验证要求
---------
 修改完成后请做这些事：
-1. 运行尽可能小范围但有效的验证
-2. 如果项目里没有现成测试，就至少做静态检查/启动路径检查/关键函数级验证
-3. 给出一份结果总结，包含：
+1. 针对命名、预览和推理链路分别做最小范围验证。
+2. 如果项目里没有现成测试，就至少做静态检查、启动路径检查或关键函数级验证。
+3. 输出结果总结，包含：
+   - 命名是否已统一
+   - 预览是否已降频/缓存
+   - 推理误报和尾延迟是否下降
+   - 还存在哪些未覆盖风险
+4. 最后给出一份可直接复制给 Codex 的后续优化指令。
 - 改了哪些文件
 - 每项修改解决了什么问题
 - 还存在哪些未解决风险

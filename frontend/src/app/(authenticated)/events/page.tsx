@@ -26,6 +26,7 @@ const VIOLATION_TYPE_OPTIONS = [
   { value: "goggles", label: "未佩戴护目镜" },
   { value: "mask", label: "未佩戴口罩" },
   { value: "safety_vest", label: "未穿戴安全背心" },
+  { value: "work_clothes", label: "未穿工作服" },
   { value: "safety_shoes", label: "未穿戴防护鞋" },
   { value: "gloves", label: "未佩戴防护手套" },
   { value: "respirator", label: "未佩戴防毒口罩" },

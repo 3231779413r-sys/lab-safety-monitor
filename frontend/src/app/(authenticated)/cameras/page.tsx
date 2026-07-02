@@ -97,6 +97,7 @@ const FALLBACK_CAMERA_EVENT_OPTIONS: CameraEventOptionsResponse = {
     { key: "hardhat", label: "未佩戴安全帽" },
     { key: "mask", label: "未佩戴口罩" },
     { key: "safety_vest", label: "未穿戴安全背心" },
+    { key: "work_clothes", label: "未穿工作服" },
     { key: "safety_shoes", label: "未穿戴防护鞋" },
     { key: "gloves", label: "未佩戴防护手套" },
     { key: "goggles", label: "未佩戴护目镜" },
@@ -211,6 +212,7 @@ export default function CamerasPage() {
   const [form, setForm] = useState<CameraFormState>(EMPTY_FORM);
   const [editing, setEditing] = useState<CameraModel | null>(null);
   const [areaCamera, setAreaCamera] = useState<CameraModel | null>(null);
+  const [areaPreviewToken, setAreaPreviewToken] = useState(0);
 
   const videoAreaRef = useRef<HTMLDivElement | null>(null);
   const dragMovedRef = useRef(false);
@@ -270,6 +272,17 @@ export default function CamerasPage() {
       window.removeEventListener("mouseup", handleMouseUp);
     };
   }, [draggingPointIndex]);
+
+  useEffect(() => {
+    if (!showAreaConfig || !areaCamera) {
+      return;
+    }
+    setAreaPreviewToken((current) => current + 1);
+    const timer = window.setInterval(() => {
+      setAreaPreviewToken((current) => current + 1);
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [showAreaConfig, areaCamera]);
 
   const openCreateDialog = () => {
     setForm(EMPTY_FORM);
@@ -353,20 +366,21 @@ export default function CamerasPage() {
   };
 
   const toggleEvent = (field: "camera_detection_scope", value: string) => {
+    const normalizedValue = value.trim().toLowerCase().replace(/[\s-]+/g, "_");
     setForm((current) => {
-      const exists = current[field].includes(value);
+      const exists = current[field].includes(normalizedValue);
       const next = exists
-        ? current[field].filter((item) => item !== value)
-        : [...current[field], value];
+        ? current[field].filter((item) => item !== normalizedValue)
+        : [...current[field], normalizedValue];
       return {
         ...current,
         [field]: next,
         area_overcapacity_polygon:
-          field === "camera_detection_scope" && value === "area_overcapacity" && exists
+          field === "camera_detection_scope" && normalizedValue === "area_overcapacity" && exists
             ? []
             : current.area_overcapacity_polygon,
         area_overcapacity_limit:
-          field === "camera_detection_scope" && value === "area_overcapacity" && exists
+          field === "camera_detection_scope" && normalizedValue === "area_overcapacity" && exists
             ? null
             : current.area_overcapacity_limit,
       };
@@ -599,9 +613,10 @@ export default function CamerasPage() {
               >
                 {areaCamera ? (
                   <img
-                    src={api.getCameraPreviewFeedUrl(areaCamera.id)}
+                    src={`${api.getLiveFrameImageUrl(areaCamera.id, { raw: false })}?t=${areaPreviewToken}`}
                     alt={areaCamera.name}
                     className="h-full w-full object-cover"
+                    loading="lazy"
                   />
                 ) : null}
                 <svg

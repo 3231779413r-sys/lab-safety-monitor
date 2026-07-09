@@ -10,11 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core.config import settings
 from ...core.danger_events import (
-    canonicalize_danger_event_key,
-    canonicalize_danger_event_values,
     expand_danger_event_filter_values,
     get_danger_event_label,
     match_danger_event_types,
+    normalize_violation_key,
 )
 from ...models.event import ComplianceEvent
 from ...models.person import Person
@@ -55,12 +54,11 @@ VIOLATION_LABEL_MAP = {
 
 
 def _format_violation_label(value: str) -> str:
-    normalized = canonicalize_danger_event_key(value)
+    normalized = normalize_violation_key(value)
     if normalized in {
         "hardhat",
         "mask",
         "safety_vest",
-        "work_clothes",
         "safety_shoes",
         "gloves",
         "goggles",
@@ -82,25 +80,19 @@ def _format_violation_label(value: str) -> str:
 
 
 def _build_violation_labels(event: ComplianceEvent) -> List[str]:
-    labels = [
-        _format_violation_label(value)
-        for value in canonicalize_danger_event_values(event.missing_ppe or [])
-    ]
-    labels.extend(
-        _format_violation_label(value)
-        for value in canonicalize_danger_event_values(event.action_violations or [])
-    )
+    labels = [_format_violation_label(value) for value in (event.missing_ppe or [])]
+    labels.extend(_format_violation_label(value) for value in (event.action_violations or []))
     return labels
 
 
 def _build_danger_event_types(event: ComplianceEvent) -> List[str]:
     if event.danger_event_types:
-        return canonicalize_danger_event_values(event.danger_event_types)
+        return event.danger_event_types
     return match_danger_event_types(event.missing_ppe or [], event.action_violations or [])
 
 
 def _build_violation_type_filter(violation_type: str):
-    normalized_violation_type = canonicalize_danger_event_key(violation_type)
+    normalized_violation_type = normalize_violation_key(violation_type)
     filter_values = expand_danger_event_filter_values(normalized_violation_type)
     conditions = []
     conditions.extend(

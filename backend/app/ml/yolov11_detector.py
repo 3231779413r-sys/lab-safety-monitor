@@ -6,7 +6,6 @@ import logging
 from typing import Dict, List, Any, Optional, Tuple
 from pathlib import Path
 from ..core.config import settings
-from ..core.danger_events import canonicalize_danger_event_key
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +64,7 @@ class YOLOv11Detector:
 
     @staticmethod
     def _normalize_label(label: str) -> str:
-        return canonicalize_danger_event_key(label)
+        return label.strip().lower().replace("-", "_").replace(" ", "_")
 
     def _check_cuda(self) -> bool:
         try:
@@ -471,21 +470,6 @@ class YOLOv11Detector:
 
         return persons, ppe_detections, violation_detections, action_violations
 
-    def _best_overlapping_positive_score(
-        self,
-        person_box: List[float],
-        violation_box: List[float],
-        positive_detections: List[Dict[str, Any]],
-    ) -> float:
-        best_score = 0.0
-        for detection in positive_detections:
-            if not self._boxes_overlap(person_box, detection["box"]):
-                continue
-            if not self._boxes_overlap(violation_box, detection["box"], threshold=0.15):
-                continue
-            best_score = max(best_score, float(detection.get("score") or 0.0))
-        return best_score
-
     def _create_person_boxes(self, boxes: List, frame_shape: tuple) -> List[Dict]:
         if not boxes:
             return []
@@ -577,17 +561,6 @@ class YOLOv11Detector:
             for ppe_type, detections in violation_detections.items():
                 for detection in detections:
                     if self._boxes_overlap(person_box, detection["box"]):
-                        positive_score = self._best_overlapping_positive_score(
-                            person_box,
-                            detection["box"],
-                            ppe_detections.get(ppe_type, []),
-                        )
-                        violation_score = float(detection.get("score") or 0.0)
-                        if (
-                            ppe_type in person["detected_ppe"]
-                            and positive_score >= violation_score * 0.85
-                        ):
-                            continue
                         if (
                             ppe_type not in person["missing_ppe"]
                             and ppe_type in required_ppe

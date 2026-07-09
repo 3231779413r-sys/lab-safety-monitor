@@ -10,8 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...core.danger_events import (
     DANGER_EVENT_TYPES,
     PERSONNEL_SELECTABLE_EVENT_TYPES,
-    canonicalize_danger_event_key,
     get_danger_event_label,
+    normalize_violation_key,
 )
 from ...ml.face_recognition import FaceRecognizer
 from ...models.external_person import ExternalPerson
@@ -41,24 +41,19 @@ def _parse_event_scope(value: Optional[str]) -> list[str]:
         if isinstance(parsed, list):
             result: list[str] = []
             for item in parsed:
-                normalized = canonicalize_danger_event_key(str(item))
+                normalized = normalize_violation_key(str(item))
                 if normalized and normalized not in result:
                     result.append(normalized)
             return result
     except json.JSONDecodeError:
         pass
-    result: list[str] = []
-    for item in value.split(","):
-        normalized = canonicalize_danger_event_key(item)
-        if normalized and normalized not in result:
-            result.append(normalized)
-    return result
+    return []
 
 
 def _encode_event_scope(values: list[str]) -> str:
     result: list[str] = []
     for value in values:
-        normalized = canonicalize_danger_event_key(value)
+        normalized = normalize_violation_key(value)
         if normalized and normalized not in result:
             result.append(normalized)
     return json.dumps(result, ensure_ascii=False)

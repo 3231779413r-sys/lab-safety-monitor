@@ -6,7 +6,8 @@ RUN corepack enable
 
 FROM base AS deps
 COPY package.json pnpm-lock.yaml .npmrc ./
-RUN pnpm install --frozen-lockfile
+COPY node_modules ./node_modules
+RUN test -d node_modules/.pnpm || pnpm install --frozen-lockfile
 
 FROM base AS builder
 ARG NEXT_PUBLIC_API_URL=
@@ -14,7 +15,7 @@ ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
 ENV NODE_ENV=production
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-RUN pnpm build
+RUN ./node_modules/.bin/next build
 
 FROM node:22-slim AS runner
 WORKDIR /app

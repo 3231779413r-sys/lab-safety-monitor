@@ -21,10 +21,9 @@ logger = logging.getLogger(__name__)
 class _PreviewPublishState:
     published_at: float = 0.0
     raw_signature: tuple[int, int] | None = None
+    annotated_signature: tuple[int, int] | None = None
     people_payload: str | None = None
     status_payload: str | None = None
-    placeholder_payload: str | None = None
-    placeholder_published_at: float = 0.0
 
 
 class LivePreviewStore:
@@ -37,19 +36,15 @@ class LivePreviewStore:
         self._publish_state: dict[str, _PreviewPublishState] = {}
 
     def read_frame(self, camera_id: str, *, raw: bool = False) -> bytes | None:
-        path = self._raw_frame_path(camera_id)
+        path = self._raw_frame_path(camera_id) if raw else self._annotated_frame_path(camera_id)
+        if not path.exists() and not raw:
+            path = self._raw_frame_path(camera_id)
         if not path.exists():
             return None
         try:
             return path.read_bytes()
         except OSError:
             return None
-
-    def read_placeholder(self, camera_id: str) -> bytes | None:
-        return self._read_bytes(self._placeholder_path(camera_id))
-
-    def write_placeholder(self, camera_id: str, payload: bytes) -> None:
-        self._write_bytes_atomic(self._placeholder_path(camera_id), payload)
 
     def read_people(self, camera_id: str) -> dict[str, Any] | None:
         return self._read_json(self._people_path(camera_id))
@@ -76,7 +71,6 @@ class LivePreviewStore:
             "annotated_write_ms": 0.0,
             "people_write_ms": 0.0,
             "status_write_ms": 0.0,
-            "placeholder_write_ms": 0.0,
             "raw_bytes": 0,
             "annotated_bytes": len(annotated_jpeg or b""),
             "publish_skipped": 0,
@@ -102,12 +96,14 @@ class LivePreviewStore:
             raw_bytes = self._encode_jpeg(raw_frame)
             metrics["raw_encode_ms"] = round((time.perf_counter() - encode_started_at) * 1000.0, 1)
         raw_signature = self._bytes_signature(raw_bytes)
+        annotated_signature = self._bytes_signature(annotated_jpeg)
         people_payload_json = json.dumps(people_payload, ensure_ascii=False, separators=(",", ":"))
         status_payload_json = json.dumps(status_payload, ensure_ascii=False, separators=(",", ":"))
 
         with self._state_lock:
             state = self._publish_state.setdefault(camera_id, _PreviewPublishState())
             write_raw = raw_bytes is not None and raw_signature != state.raw_signature
+            write_annotated = annotated_jpeg is not None and annotated_signature != state.annotated_signature
             write_people = people_payload_json != state.people_payload
             write_status = status_payload_json != state.status_payload
 
@@ -116,6 +112,10 @@ class LivePreviewStore:
             self._write_bytes_atomic(self._raw_frame_path(camera_id), raw_bytes)
             metrics["raw_write_ms"] = round((time.perf_counter() - write_started_at) * 1000.0, 1)
             metrics["raw_bytes"] = len(raw_bytes)
+        if write_annotated and annotated_jpeg is not None:
+            annotated_started_at = time.perf_counter()
+            self._write_bytes_atomic(self._annotated_frame_path(camera_id), annotated_jpeg)
+            metrics["annotated_write_ms"] = round((time.perf_counter() - annotated_started_at) * 1000.0, 1)
 
         if write_people:
             people_started_at = time.perf_counter()
@@ -132,6 +132,8 @@ class LivePreviewStore:
             state.published_at = finished_at
             if raw_signature is not None:
                 state.raw_signature = raw_signature
+            if annotated_signature is not None:
+                state.annotated_signature = annotated_signature
             if write_people:
                 state.people_payload = people_payload_json
             if write_status:
@@ -145,14 +147,14 @@ class LivePreviewStore:
     def _raw_frame_path(self, camera_id: str) -> Path:
         return self._camera_dir(camera_id) / "raw.jpg"
 
+    def _annotated_frame_path(self, camera_id: str) -> Path:
+        return self._camera_dir(camera_id) / "annotated.jpg"
+
     def _people_path(self, camera_id: str) -> Path:
         return self._camera_dir(camera_id) / "people.json"
 
     def _status_path(self, camera_id: str) -> Path:
         return self._camera_dir(camera_id) / "status.json"
-
-    def _placeholder_path(self, camera_id: str) -> Path:
-        return self._camera_dir(camera_id) / "placeholder.jpg"
 
     def _encode_jpeg(self, frame: np.ndarray) -> bytes | None:
         ok, encoded = cv2.imencode(
@@ -170,14 +172,6 @@ class LivePreviewStore:
         try:
             return json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            return None
-
-    def _read_bytes(self, path: Path) -> bytes | None:
-        if not path.exists():
-            return None
-        try:
-            return path.read_bytes()
-        except OSError:
             return None
 
     def _write_json_atomic(self, path: Path, payload: dict[str, Any]) -> None:

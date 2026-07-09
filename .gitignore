@@ -86,3 +86,10 @@ backend/tools/minio
 
 # 拦截模型压缩包
 *.zip
+
+# 本地运行产物与大文件
+logs/
+.local/
+lab-safety-monitor-photos/
+mc
+git-lfs_*.deb

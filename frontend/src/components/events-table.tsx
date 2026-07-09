@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -32,7 +32,7 @@ interface SnapshotPreviewState {
   overlay?: ComplianceEvent["snapshot_overlay"];
 }
 
-function SnapshotOverlayPreview({
+const SnapshotOverlayPreview = memo(function SnapshotOverlayPreview({
   url,
   overlay,
 }: {
@@ -124,7 +124,7 @@ function SnapshotOverlayPreview({
       ) : null}
     </div>
   );
-}
+});
 
 export function EventsTable({ events, cameras, loading = false }: EventsTableProps) {
   const [previewImage, setPreviewImage] = useState<SnapshotPreviewState | null>(null);
@@ -136,8 +136,10 @@ export function EventsTable({ events, cameras, loading = false }: EventsTablePro
     return resolveApiAssetUrl(url) || url;
   };
 
-  // Create camera lookup map
-  const cameraMap = new Map(cameras?.map((c) => [c.id, c]) ?? []);
+  const cameraMap = useMemo(
+    () => new Map(cameras?.map((camera) => [camera.id, camera]) ?? []),
+    [cameras]
+  );
   const getCameraName = (cameraId: string | null) => {
     if (!cameraId) return null;
     return cameraMap.get(cameraId)?.name ?? cameraId.slice(0, 8);

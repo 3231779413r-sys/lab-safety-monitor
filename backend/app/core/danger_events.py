@@ -5,7 +5,6 @@ PPE_DANGER_EVENT_TYPES = (
     "hardhat",
     "mask",
     "safety_vest",
-    "work_clothes",
     "safety_shoes",
     "gloves",
     "goggles",
@@ -36,7 +35,6 @@ DANGER_EVENT_LABELS = {
     "hardhat": "未佩戴安全帽",
     "mask": "未佩戴口罩",
     "safety_vest": "未穿戴安全背心",
-    "work_clothes": "未穿工作服",
     "safety_shoes": "未穿戴防护鞋",
     "gloves": "未佩戴防护手套",
     "goggles": "未佩戴护目镜",
@@ -53,17 +51,11 @@ DANGER_EVENT_LABELS = {
 
 _DANGER_EVENT_MATCHERS = {
     "hardhat": "hardhat",
-    "hard_hat": "hardhat",
     "no_hardhat": "hardhat",
-    "no_hard_hat": "hardhat",
     "mask": "mask",
     "no_mask": "mask",
     "safety_vest": "safety_vest",
-    "vest": "safety_vest",
     "no_safety_vest": "safety_vest",
-    "no_vest": "safety_vest",
-    "work_clothes": "work_clothes",
-    "no_work_clothes": "work_clothes",
     "safety_shoes": "safety_shoes",
     "protective_shoes": "safety_shoes",
     "no_safety_shoes": "safety_shoes",
@@ -92,36 +84,22 @@ def normalize_violation_key(value: str) -> str:
     return (value or "").strip().lower().replace("-", "_").replace(" ", "_")
 
 
-def canonicalize_danger_event_key(value: str) -> str:
-    normalized = normalize_violation_key(value)
-    if not normalized:
-        return ""
-    if normalized.startswith("action:"):
-        action_value = canonicalize_danger_event_key(normalized.split(":", 1)[1])
-        return f"action:{action_value}" if action_value else ""
-    return _DANGER_EVENT_MATCHERS.get(normalized, normalized)
-
-
-def canonicalize_danger_event_values(*value_groups: Iterable[str] | None) -> list[str]:
-    canonicalized: list[str] = []
+def match_danger_event_types(*value_groups: Iterable[str] | None) -> list[str]:
+    matched: list[str] = []
     seen: set[str] = set()
 
     for values in value_groups:
         for value in values or []:
-            canonical = canonicalize_danger_event_key(value)
-            if canonical and canonical not in seen:
-                seen.add(canonical)
-                canonicalized.append(canonical)
+            matched_type = _DANGER_EVENT_MATCHERS.get(normalize_violation_key(value))
+            if matched_type and matched_type not in seen:
+                seen.add(matched_type)
+                matched.append(matched_type)
 
-    return canonicalized
-
-
-def match_danger_event_types(*value_groups: Iterable[str] | None) -> list[str]:
-    return canonicalize_danger_event_values(*value_groups)
+    return matched
 
 
 def expand_danger_event_filter_values(event_type: str) -> list[str]:
-    normalized = canonicalize_danger_event_key(event_type)
+    normalized = normalize_violation_key(event_type)
     if not normalized:
         return []
 
@@ -137,5 +115,5 @@ def expand_danger_event_filter_values(event_type: str) -> list[str]:
 
 
 def get_danger_event_label(event_type: str) -> str:
-    normalized = canonicalize_danger_event_key(event_type)
+    normalized = normalize_violation_key(event_type)
     return DANGER_EVENT_LABELS.get(normalized, normalized)

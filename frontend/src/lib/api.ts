@@ -83,6 +83,10 @@ export interface LivePersonOverlay {
   person_id?: string | null;
   person_name: string;
   box: number[];
+  detected_ppe?: string[];
+  missing_ppe?: string[];
+  stable_missing_ppe?: string[];
+  detection_confidence?: Record<string, number>;
 }
 
 export interface LivePersonOverlayResponse {

@@ -55,12 +55,12 @@ COPY pyproject.toml uv.lock README.md ./
 RUN uv pip install --python /opt/venv/bin/python .
 RUN /opt/venv/bin/pip install --no-deps "faiss-cpu>=1.14.0" "torchreid>=0.2.5"
 
-RUN /opt/venv/bin/pip uninstall -y onnxruntime || true
-RUN /opt/venv/bin/pip install --no-deps --force-reinstall onnxruntime-gpu==1.26.0
-
 COPY app ./app
 COPY alembic ./alembic
 COPY alembic.ini ./
+
+RUN /opt/venv/bin/pip uninstall -y onnxruntime || true
+RUN /opt/venv/bin/pip install --no-deps --force-reinstall onnxruntime-gpu==1.26.0
 
 EXPOSE 8001
 CMD ["uvicorn", "app.worker_api:app", "--host", "0.0.0.0", "--port", "8001"]

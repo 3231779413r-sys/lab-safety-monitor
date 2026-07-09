@@ -258,18 +258,9 @@ class SharedFrameStore:
                 logger.warning("Failed to cleanup shared frame file: %s", path, exc_info=True)
         for metadata_path in self.base_dir.glob("*/*.json"):
             try:
-                metadata = self._read_metadata_path(metadata_path)
-                if metadata is None:
-                    modified_at = metadata_path.stat().st_mtime
-                    if modified_at < deadline:
-                        metadata_path.unlink(missing_ok=True)
-                    continue
-                deleted_at = float(
-                    metadata.get("deleted_at")
-                    or metadata.get("last_release_at")
-                    or metadata.get("created_at")
-                    or 0.0
-                )
+                with open(metadata_path, "r", encoding="utf-8") as handle:
+                    metadata = json.load(handle)
+                deleted_at = float(metadata.get("deleted_at") or metadata.get("last_release_at") or metadata.get("created_at") or 0.0)
                 if deleted_at and deleted_at < deadline:
                     metadata_path.unlink(missing_ok=True)
             except FileNotFoundError:
@@ -282,12 +273,7 @@ class SharedFrameStore:
         if not frame_path:
             return None
         path = Path(frame_path)
-        return self._read_metadata_path(self._metadata_path(path))
-
-    def _read_metadata_path(self, metadata_path: Path) -> Optional[dict[str, Any]]:
-        if not metadata_path.exists():
-            return None
-        with self._locked_metadata_path(metadata_path, create_if_missing=False) as handle:
+        with self._locked_metadata_file(path, create_if_missing=False) as handle:
             if handle is None:
                 return None
             return self._read_metadata_locked(handle)
@@ -301,9 +287,6 @@ class SharedFrameStore:
 
     def _locked_metadata_file(self, frame_path: Path, *, create_if_missing: bool = True):
         metadata_path = self._metadata_path(frame_path)
-        return self._locked_metadata_path(metadata_path, create_if_missing=create_if_missing)
-
-    def _locked_metadata_path(self, metadata_path: Path, *, create_if_missing: bool = True):
         if not create_if_missing and not metadata_path.exists():
             return _NullLockedMetadataHandle()
         metadata_path.parent.mkdir(parents=True, exist_ok=True)

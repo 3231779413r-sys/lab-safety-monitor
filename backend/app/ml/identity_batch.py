@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Optional
 
 import cv2
@@ -50,19 +51,29 @@ class IdentityBatchEngine:
             [None for _ in list(task.get("persons") or [])] for task in tasks
         ]
         person_face_identities: list[list[dict[str, Any]]] = [[] for _ in tasks]
+        face_detect_ms = 0.0
+        crop_resolve_ms = 0.0
+        reid_extract_ms = 0.0
+        face_match_ms = 0.0
 
         for task_index, task in enumerate(tasks):
             frame = task.get("frame")
             persons = list(task.get("persons") or [])
             if frame is not None and bool(task.get("face_detection_requested", True)):
+                face_detect_started_at = time.perf_counter()
                 face_results[task_index] = self._detect_faces(frame, persons)
+                face_detect_ms += (time.perf_counter() - face_detect_started_at) * 1000.0
             for person_index, person in enumerate(persons):
+                crop_resolve_started_at = time.perf_counter()
                 crop = self._resolve_person_crop(frame, person)
+                crop_resolve_ms += (time.perf_counter() - crop_resolve_started_at) * 1000.0
                 crops.append(crop)
                 crop_bindings.append((task_index, person_index))
 
         if self.extractor is not None and crops:
+            reid_started_at = time.perf_counter()
             extracted = self.extractor.extract_crops(crops)
+            reid_extract_ms = (time.perf_counter() - reid_started_at) * 1000.0
             for (task_index, person_index), feature in zip(crop_bindings, extracted):
                 appearance_results[task_index][person_index] = feature
 
@@ -71,6 +82,7 @@ class IdentityBatchEngine:
             persons = list(task.get("persons") or [])
             if not persons:
                 continue
+            face_match_started_at = time.perf_counter()
             if frame is not None:
                 person_face_identities[task_index] = self._match_person_faces(
                     frame=frame,
@@ -84,9 +96,19 @@ class IdentityBatchEngine:
                     camera_id=str(task.get("camera_id") or ""),
                     persons=persons,
                 )
+            face_match_ms += (time.perf_counter() - face_match_started_at) * 1000.0
 
         payloads: list[dict[str, Any]] = []
+        payload_build_started_at = time.perf_counter()
+        batch_profile = {
+            "identity_face_detect_ms": round(face_detect_ms, 1),
+            "identity_crop_resolve_ms": round(crop_resolve_ms, 1),
+            "identity_reid_extract_ms": round(reid_extract_ms, 1),
+            "identity_face_match_ms": round(face_match_ms, 1),
+        }
         for task_index, task in enumerate(tasks):
+            telemetry = dict(task.get("telemetry") or {})
+            telemetry.update(batch_profile)
             payloads.append(
                 build_identity_result_payload(
                     request_id=str(task.get("request_id") or ""),
@@ -97,9 +119,12 @@ class IdentityBatchEngine:
                     person_face_identities=person_face_identities[task_index],
                     result_queue=str(task.get("result_queue") or ""),
                     submitted_at=task.get("submitted_at"),
-                    telemetry=task.get("telemetry"),
+                    telemetry=telemetry,
                 )
             )
+        payload_build_ms = round((time.perf_counter() - payload_build_started_at) * 1000.0, 1)
+        for payload in payloads:
+            payload.setdefault("telemetry", {})["identity_payload_build_ms"] = payload_build_ms
         return payloads
 
     def _match_person_faces(

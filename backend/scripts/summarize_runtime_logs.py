@@ -15,6 +15,59 @@ FRAME_TIMING_RE = re.compile(r"FRAME_TIMING\s+(\{.*\})")
 SHARD_SUMMARY_RE = re.compile(r"CAMERA_RUNTIME_SHARD_SUMMARY\s+(\{.*\})")
 CAMERA_SUMMARY_RE = re.compile(r"CAMERA_RUNTIME_SUMMARY\s+(\{.*\})")
 
+STAGE_TIMING_FIELDS = [
+    "capture_read_ms",
+    "capture_resize_ms",
+    "capture_raw_encode_ms",
+    "capture_cache_update_ms",
+    "transport_inline_encode_ms",
+    "shared_frame_write_ms",
+    "transport_prepare_wall_ms",
+    "inference_submit_queue_wait_ms",
+    "inference_broker_wait_ms",
+    "inference_worker_wait_ms",
+    "inference_batch_wait_ms",
+    "inference_compute_ms",
+    "person_detect_ms",
+    "ppe_detect_ms",
+    "pose_detect_ms",
+    "postprocess_ms",
+    "total_engine_ms",
+    "inference_result_publish_ms",
+    "inference_result_broker_to_runtime_ms",
+    "identity_enqueue_wait_ms",
+    "identity_submit_queue_wait_ms",
+    "identity_payload_prepare_ms",
+    "identity_crop_encode_ms",
+    "identity_frame_encode_ms",
+    "identity_broker_wait_ms",
+    "identity_worker_wait_ms",
+    "identity_batch_wait_ms",
+    "identity_compute_ms",
+    "identity_face_detect_ms",
+    "identity_reid_extract_ms",
+    "identity_face_match_ms",
+    "identity_payload_build_ms",
+    "identity_result_publish_ms",
+    "identity_result_broker_to_runtime_ms",
+    "processing_queue_wait_ms",
+    "pipeline_process_ms",
+    "workshop_overcapacity_sync_ms",
+    "annotated_preview_jpeg_ms",
+    "state_update_ms",
+    "processing_ms",
+    "preview_publish_queue_wait_ms",
+    "preview_raw_encode_ms",
+    "preview_raw_write_ms",
+    "preview_annotated_write_ms",
+    "preview_people_write_ms",
+    "preview_status_write_ms",
+    "preview_publish_store_ms",
+    "preview_total_ms",
+    "persist_ms",
+    "persist_total_ms",
+]
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Summarize runtime logs for lab safety monitor.")
@@ -189,6 +242,8 @@ def main() -> int:
     camera_shards: dict[str, Counter[str]] = defaultdict(Counter)
     camera_backpressure_skips: Counter[str] = Counter()
     shard_latency: dict[str, list[float]] = defaultdict(list)
+    stage_latency: dict[str, list[float]] = defaultdict(list)
+    camera_stage_latency: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
     latest_camera_summaries: dict[str, dict[str, Any]] = {}
     latest_shard_summaries: dict[str, dict[str, Any]] = {}
 
@@ -215,6 +270,16 @@ def main() -> int:
             if payload.get("stage") == "identity_async_merged":
                 identity_async_merged_count += 1
             camera_id = str(payload.get("camera_id") or "")
+            for field in STAGE_TIMING_FIELDS:
+                if payload.get(field) is None:
+                    continue
+                try:
+                    value = float(payload[field])
+                except (TypeError, ValueError):
+                    continue
+                stage_latency[field].append(value)
+                if camera_id:
+                    camera_stage_latency[camera_id][field].append(value)
             if payload.get("inference_total_ms") is not None:
                 value = float(payload["inference_total_ms"])
                 inference_total_ms.append(value)
@@ -272,9 +337,22 @@ def main() -> int:
     print(f"identity_async_merged_count: {identity_async_merged_count}")
     print("batch_size_distribution:", dict(sorted(batch_size_dist.items())))
 
+    print("stage_latency_by_p95:")
+    for field, avg, p95, count in top_items(stage_latency, limit=20):
+        print(f"  {field}: avg={avg:.1f} p95={p95:.1f} count={count}")
+
     print("top_cameras_by_latency:")
     for camera_id, avg, p95, count in top_items(camera_latency):
         print(f"  {camera_id}: avg={avg:.1f} p95={p95:.1f} count={count}")
+        slow_stages = top_items(camera_stage_latency.get(camera_id, {}), limit=5)
+        if slow_stages:
+            print(
+                "    slow_stages: "
+                + ", ".join(
+                    f"{field}=avg:{stage_avg:.1f}/p95:{stage_p95:.1f}"
+                    for field, stage_avg, stage_p95, _stage_count in slow_stages
+                )
+            )
 
     print("top_shards_by_latency:")
     for shard_id, avg, p95, count in top_items(shard_latency):

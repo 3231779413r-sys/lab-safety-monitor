@@ -92,7 +92,7 @@ class Settings(BaseSettings):
     INIT_ADMIN_FULL_NAME: str = "系统管理员"
 
     # Detector settings
-    DETECTOR_TYPE: str = Field(default="hybrid")
+    DETECTOR_TYPE: str = Field(default="yolov11")
     DETECTION_CONFIDENCE_THRESHOLD: float = 0.5
     PERSON_MIN_BOX_AREA_RATIO: float = 0.14
     PERSON_MIN_BOX_AREA_FALLBACK_SCORE_THRESHOLD: float = 0.7
@@ -155,12 +155,18 @@ class Settings(BaseSettings):
 
     # Temporal filtering
     FRAME_SAMPLE_RATE: int = 10
-    TEMPORAL_BUFFER_SIZE: int = 3
-    TEMPORAL_VIOLATION_MIN_FRAMES: int = 2
+    TEMPORAL_BUFFER_SIZE: int = 5
+    TEMPORAL_VIOLATION_MIN_FRAMES: int = 5
     TEMPORAL_VIOLATION_MIN_FRAMES_CLEAR: int = 3  # Frames without violation to clear (hysteresis)
     TEMPORAL_FUSION_STRATEGY: str = Field(default="ema")
     TEMPORAL_EMA_ALPHA: float = Field(default=0.7)
     TEMPORAL_CONFIDENCE_THRESHOLD: float = Field(default=0.4)
+    PPE_UNKNOWN_AS_MISSING_CONFIDENCE: float = Field(default=0.45)
+    PPE_UNKNOWN_AS_MISSING_TYPES: List[str] = Field(default=[])
+    PPE_STRICT_CONSECUTIVE_TYPES: List[str] = Field(default=["hardhat"])
+    PPE_VIOLATION_MIN_FRAMES: Dict[str, int] = Field(
+        default={"hardhat": 5, "protective_clothing": 4}
+    )
 
     # Live stream settings
     LIVE_STREAM_DISPLAY_FPS: int = Field(default=30)  # Display frame rate
@@ -237,22 +243,23 @@ class Settings(BaseSettings):
 
     # PPE configuration
     PPE_PROMPTS: List[str] = Field(
-        default=["mask", "hardhat", "safety_vest"]
+        default=["mask", "hardhat", "protective_clothing"]
     )
     REQUIRED_PPE: List[str] = Field(
-        default=["mask", "hardhat", "safety_vest"]
+        default=["mask", "hardhat", "protective_clothing"]
     )
 
     PPE_CLASS_MAP: Dict[str, str] = Field(
         default={
             "Mask": "mask",
             "Hardhat": "hardhat",
-            "Safety Vest": "safety_vest",
+            "Safety Vest": "protective_clothing",
+            "Work Clothes": "protective_clothing",
         }
     )
 
     VIOLATION_CLASSES: List[str] = Field(
-        default=["NO-Mask", "NO-Hardhat", "NO-Safety Vest"]
+        default=["NO-Mask", "NO-Hardhat", "NO-Protective Clothing"]
     )
 
     ACTION_VIOLATION_CLASSES: List[str] = Field(default=[])

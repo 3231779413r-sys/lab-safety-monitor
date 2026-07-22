@@ -202,7 +202,10 @@ class IdentityBroker:
                 "error_type": parsed.get("error_type"),
                 "error_detail": parsed.get("error_detail"),
                 "frame_path": parsed.get("frame_path"),
-                "_telemetry": clone_telemetry(parsed.get("telemetry")),
+                "_telemetry": mark_telemetry(
+                    clone_telemetry(parsed.get("telemetry")),
+                    "identity_result_broker_received_at",
+                ),
             }
             handler = self._result_handler
             if handler is None:

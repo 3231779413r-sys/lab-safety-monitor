@@ -4,7 +4,7 @@ from typing import Iterable
 PPE_DANGER_EVENT_TYPES = (
     "hardhat",
     "mask",
-    "safety_vest",
+    "protective_clothing",
     "safety_shoes",
     "gloves",
     "goggles",
@@ -34,7 +34,7 @@ PERSONNEL_SELECTABLE_EVENT_TYPES = PPE_DANGER_EVENT_TYPES + (
 DANGER_EVENT_LABELS = {
     "hardhat": "未佩戴安全帽",
     "mask": "未佩戴口罩",
-    "safety_vest": "未穿戴安全背心",
+    "protective_clothing": "未穿戴防护服",
     "safety_shoes": "未穿戴防护鞋",
     "gloves": "未佩戴防护手套",
     "goggles": "未佩戴护目镜",
@@ -54,8 +54,14 @@ _DANGER_EVENT_MATCHERS = {
     "no_hardhat": "hardhat",
     "mask": "mask",
     "no_mask": "mask",
-    "safety_vest": "safety_vest",
-    "no_safety_vest": "safety_vest",
+    "protective_clothing": "protective_clothing",
+    "no_protective_clothing": "protective_clothing",
+    "safety_vest": "protective_clothing",
+    "safety_est": "protective_clothing",
+    "no_safety_vest": "protective_clothing",
+    "no_safety_est": "protective_clothing",
+    "work_clothes": "protective_clothing",
+    "no_work_clothes": "protective_clothing",
     "safety_shoes": "safety_shoes",
     "protective_shoes": "safety_shoes",
     "no_safety_shoes": "safety_shoes",
@@ -116,4 +122,5 @@ def expand_danger_event_filter_values(event_type: str) -> list[str]:
 
 def get_danger_event_label(event_type: str) -> str:
     normalized = normalize_violation_key(event_type)
-    return DANGER_EVENT_LABELS.get(normalized, normalized)
+    matched = _DANGER_EVENT_MATCHERS.get(normalized, normalized)
+    return DANGER_EVENT_LABELS.get(matched, matched)

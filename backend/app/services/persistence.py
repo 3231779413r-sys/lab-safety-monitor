@@ -25,7 +25,12 @@ VIOLATION_LABEL_MAP = {
     "no_gloves": "未佩戴防护手套",
     "no_head_mask": "未戴头套",
     "head_mask": "头套",
-    "no_safety_vest": "未穿戴安全背心",
+    "protective_clothing": "未穿戴防护服",
+    "no_protective_clothing": "未穿戴防护服",
+    "safety_vest": "未穿戴防护服",
+    "no_safety_vest": "未穿戴防护服",
+    "work_clothes": "未穿戴防护服",
+    "no_work_clothes": "未穿戴防护服",
     "no_hardhat": "未佩戴安全帽",
     "no_safety_shoes": "未穿戴防护鞋",
     "protective_shoes": "未穿戴防护鞋",
@@ -55,7 +60,7 @@ def _format_violation_label(value: str) -> str:
     if normalized in {
         "hardhat",
         "mask",
-        "safety_vest",
+        "protective_clothing",
         "safety_shoes",
         "gloves",
         "goggles",
@@ -114,8 +119,10 @@ class PersistenceManager:
             base_identity = f"person:{person_id}"
         else:
             camera_part = camera_id or "unknown_camera"
-            tracking_part = tracking_key or "unknown_track"
-            base_identity = f"unmatched:{camera_part}:{tracking_part}"
+            # Unmatched track IDs can churn every few seconds on live cameras. Use
+            # camera-level cooldown for unknown people so one person does not
+            # repeatedly alert just because the tracker assigned a new ID.
+            base_identity = f"unmatched:{camera_part}"
         return self.dedup_manager.resolve_identity_key(
             base_identity_key=base_identity,
             embedding=face_embedding,

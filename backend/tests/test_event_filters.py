@@ -16,6 +16,19 @@ class DangerEventFilterTests(unittest.TestCase):
             expand_danger_event_filter_values("safety_shoes"),
             ["safety_shoes", "protective_shoes", "no_safety_shoes", "no_protective_shoes"],
         )
+        self.assertEqual(
+            expand_danger_event_filter_values("protective_clothing"),
+            [
+                "protective_clothing",
+                "no_protective_clothing",
+                "safety_vest",
+                "safety_est",
+                "no_safety_vest",
+                "no_safety_est",
+                "work_clothes",
+                "no_work_clothes",
+            ],
+        )
 
     def test_violation_type_filter_matches_normalized_and_legacy_values(self):
         expression = _build_violation_type_filter("hardhat")

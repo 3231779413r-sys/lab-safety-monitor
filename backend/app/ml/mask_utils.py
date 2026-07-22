@@ -48,7 +48,9 @@ COLORS = {
     "mask": (0, 255, 255),  # Yellow
     "gloves": (255, 0, 255),  # Magenta
     "hardhat": (255, 255, 0),  # Cyan
+    "protective_clothing": (0, 165, 255),  # Orange
     "safety_vest": (0, 165, 255),  # Orange
+    "work_clothes": (0, 165, 255),  # Orange
     "fall_detected": (255, 102, 102),  # Light red
     "violation": (0, 0, 255),  # Red
     "tentative": (0, 255, 255),  # Yellow

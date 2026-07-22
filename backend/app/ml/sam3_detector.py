@@ -215,7 +215,7 @@ class SAM3Detector:
                 "hardhat": [{"box": [120, 60, 260, 150], "score": 0.85, "mask": None}],
                 "mask": [],
                 "gloves": [],
-                "safety_vest": [{"box": [100, 120, 300, 400], "score": 0.8, "mask": None}],
+                "protective_clothing": [{"box": [100, 120, 300, 400], "score": 0.8, "mask": None}],
             },
             "frame_shape": (h, w),
         }

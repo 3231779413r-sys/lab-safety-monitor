@@ -395,7 +395,11 @@ class HybridDetector:
     ) -> List[Dict]:
         """Associate PPE items and violations with persons using box/mask overlap."""
         class_map = getattr(settings, "PPE_CLASS_MAP", {})
-        required_ppe = settings.REQUIRED_PPE
+        required_ppe = set(settings.REQUIRED_PPE)
+        unknown_as_missing_types = set(getattr(settings, "PPE_UNKNOWN_AS_MISSING_TYPES", []))
+        unknown_missing_confidence = float(
+            getattr(settings, "PPE_UNKNOWN_AS_MISSING_CONFIDENCE", 0.45) or 0.45
+        )
         violation_detections = violation_detections or {}
         action_violations = action_violations or {}
 
@@ -404,6 +408,8 @@ class HybridDetector:
             person_mask = person.get("mask")
             detected_ppe, missing_ppe, person_actions = [], [], []
             detection_confidence, ppe_dets = {}, []
+            associated_ppe: set[str] = set()
+            associated_violations: set[str] = set()
 
             for ppe_class, ppe_list in ppe_detections.items():
                 if ppe_class.startswith("No "):
@@ -419,6 +425,7 @@ class HybridDetector:
 
                     if containment >= self._containment_threshold:
                         ppe_name = class_map.get(ppe_class, ppe_class)
+                        associated_ppe.add(ppe_name)
                         if ppe_name not in detected_ppe:
                             detected_ppe.append(ppe_name)
                             detection_confidence[ppe_name] = ppe.get("score", 0.0)
@@ -459,6 +466,19 @@ class HybridDetector:
                         or containment >= self._violation_containment_threshold
                         or iou >= 0.1
                     ):
+                        associated_violations.add(viol_class)
+                        if viol_class in associated_ppe:
+                            ppe_dets.append(
+                                {
+                                    "label": viol_class,
+                                    "display_name": viol_class,
+                                    "box": viol_box,
+                                    "score": viol.get("score", 0.0),
+                                    "is_violation": True,
+                                    "suppressed_by_positive": True,
+                                }
+                            )
+                            continue
                         if viol_class in required_ppe and viol_class not in missing_ppe:
                             missing_ppe.append(viol_class)
                             detection_confidence[f"no_{viol_class}"] = viol.get(
@@ -473,6 +493,13 @@ class HybridDetector:
                                 "is_violation": True,
                             }
                         )
+
+            for ppe_name in sorted(required_ppe & unknown_as_missing_types):
+                if ppe_name in associated_ppe or ppe_name in associated_violations:
+                    continue
+                if ppe_name not in missing_ppe:
+                    missing_ppe.append(ppe_name)
+                    detection_confidence[f"no_{ppe_name}"] = unknown_missing_confidence
 
             for action in action_violations:
                 action_box = action.get("box", [0, 0, 0, 0])

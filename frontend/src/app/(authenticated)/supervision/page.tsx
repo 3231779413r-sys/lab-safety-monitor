@@ -44,6 +44,7 @@ import type {
   SystemSupervisionSettings,
   VisitorRegistration,
 } from "@/lib/api";
+import { formatSafetyLabel } from "@/lib/formatters";
 
 type VisitorFormState = {
   start_date: string;
@@ -782,7 +783,7 @@ export default function SupervisionPage() {
                           : "border-border bg-background text-foreground hover:bg-muted",
                       ].join(" ")}
                     >
-                      {item.label}
+                      {formatSafetyLabel(item.key || item.label)}
                     </button>
                   );
                 })}
@@ -1531,7 +1532,7 @@ export default function SupervisionPage() {
                                   key={label}
                                   className="rounded border border-red-300 bg-red-50 px-2 py-0.5 text-[11px] leading-4 text-red-700"
                                 >
-                                  {label}
+                                  {formatSafetyLabel(label)}
                                 </span>
                               ))
                             ) : (
@@ -1635,7 +1636,7 @@ function ExternalRecordCard({
                 key={label}
                 className="rounded border border-red-300 bg-red-50 px-2 py-0.5 text-[11px] leading-4 text-red-700"
               >
-                {label}
+                {formatSafetyLabel(label)}
               </span>
             ))
           ) : (

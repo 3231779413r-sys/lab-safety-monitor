@@ -14,33 +14,53 @@ class YOLOv11Detector:
     """PPE Detector using trained YOLOv11 model."""
 
     DEFAULT_CLASS_NAMES = {
-        0: "Hardhat",
-        1: "Mask",
-        2: "NO-Hardhat",
-        3: "NO-Mask",
-        4: "NO-Safety Vest",
-        5: "Person",
-        6: "Safety Cone",
-        7: "Safety Vest",
-        8: "machinery",
-        9: "vehicle",
+        0: "人",
+        1: "戴安全帽",
+        2: "未戴安全帽",
+        3: "戴口罩",
+        4: "未戴口罩",
+        5: "穿防护背心",
+        6: "穿工作服",
+        7: "既未穿防护背心也未穿工作服",
     }
 
     POSITIVE_PPE_MAP = {
         "hardhat": "hardhat",
+        "hard_hat": "hardhat",
+        "戴安全帽": "hardhat",
         "mask": "mask",
-        "safety_vest": "safety_vest",
+        "戴口罩": "mask",
+        "safety_vest": "protective_clothing",
+        "vest": "protective_clothing",
+        "work_clothes": "protective_clothing",
+        "workwear": "protective_clothing",
+        "protective_clothing": "protective_clothing",
+        "穿防护背心": "protective_clothing",
+        "防护背心": "protective_clothing",
+        "穿工作服": "protective_clothing",
+        "工作服": "protective_clothing",
     }
 
     VIOLATION_PPE_MAP = {
         "no_hardhat": "hardhat",
+        "no_hard_hat": "hardhat",
+        "未戴安全帽": "hardhat",
+        "未佩戴安全帽": "hardhat",
         "no_mask": "mask",
-        "no_safety_vest": "safety_vest",
+        "未戴口罩": "mask",
+        "未佩戴口罩": "mask",
+        "no_safety_vest": "protective_clothing",
+        "no_vest": "protective_clothing",
+        "no_work_clothes": "protective_clothing",
+        "no_protective_clothing": "protective_clothing",
+        "既未穿防护背心也未穿工作服": "protective_clothing",
+        "未穿防护背心也未穿工作服": "protective_clothing",
+        "未穿戴防护服": "protective_clothing",
     }
 
     ACTION_VIOLATIONS = {}
 
-    PERSON_LABELS = {"person"}
+    PERSON_LABELS = {"person", "人"}
     IGNORED_SCENE_LABELS = {"safety_cone", "machinery", "vehicle"}
 
     def __init__(self):
@@ -470,6 +490,18 @@ class YOLOv11Detector:
 
         return persons, ppe_detections, violation_detections, action_violations
 
+    @staticmethod
+    def _required_ppe() -> set[str]:
+        return {str(item) for item in getattr(settings, "REQUIRED_PPE", [])}
+
+    @staticmethod
+    def _unknown_as_missing_types() -> set[str]:
+        return {str(item) for item in getattr(settings, "PPE_UNKNOWN_AS_MISSING_TYPES", [])}
+
+    @staticmethod
+    def _unknown_missing_confidence() -> float:
+        return float(getattr(settings, "PPE_UNKNOWN_AS_MISSING_CONFIDENCE", 0.45) or 0.45)
+
     def _create_person_boxes(self, boxes: List, frame_shape: tuple) -> List[Dict]:
         if not boxes:
             return []
@@ -503,15 +535,15 @@ class YOLOv11Detector:
                 "hardhat": [
                     {"box": [155, 80, 245, 155], "score": 0.9, "mask": None}
                 ],
-                "safety_vest": [],
+                "protective_clothing": [],
             },
             "violation_detections": {
-                "safety_vest": [
+                "protective_clothing": [
                     {
                         "box": [125, 140, 285, 380],
                         "score": 0.75,
                         "mask": None,
-                        "class_name": "NO-Safety Vest",
+                        "class_name": "NO-Protective Clothing",
                     }
                 ],
             },
@@ -539,9 +571,13 @@ class YOLOv11Detector:
             person["ppe_detections"] = []
             person_box = person["box"]
 
+            associated_ppe: set[str] = set()
+            associated_violations: set[str] = set()
+
             for ppe_type, detections in ppe_detections.items():
                 for detection in detections:
                     if self._boxes_overlap(person_box, detection["box"]):
+                        associated_ppe.add(ppe_type)
                         if ppe_type not in person["detected_ppe"]:
                             person["detected_ppe"].append(ppe_type)
                             person["detection_confidence"][ppe_type] = detection.get(
@@ -561,10 +597,20 @@ class YOLOv11Detector:
             for ppe_type, detections in violation_detections.items():
                 for detection in detections:
                     if self._boxes_overlap(person_box, detection["box"]):
-                        if (
-                            ppe_type not in person["missing_ppe"]
-                            and ppe_type in required_ppe
-                        ):
+                        associated_violations.add(ppe_type)
+                        if ppe_type in associated_ppe:
+                            person["ppe_detections"].append(
+                                {
+                                    "label": ppe_type,
+                                    "display_name": ppe_type,
+                                    "box": detection["box"],
+                                    "score": detection.get("score", 0.0),
+                                    "is_violation": True,
+                                    "suppressed_by_positive": True,
+                                }
+                            )
+                            break
+                        if ppe_type not in person["missing_ppe"] and ppe_type in required_ppe:
                             person["missing_ppe"].append(ppe_type)
                             person["detection_confidence"][f"no_{ppe_type}"] = (
                                 detection.get("score", 0.0)
@@ -579,6 +625,13 @@ class YOLOv11Detector:
                             }
                         )
                         break
+
+            for ppe_type in sorted(required_ppe & self._unknown_as_missing_types()):
+                if ppe_type in associated_ppe or ppe_type in associated_violations:
+                    continue
+                if ppe_type not in person["missing_ppe"]:
+                    person["missing_ppe"].append(ppe_type)
+                    person["detection_confidence"][f"no_{ppe_type}"] = self._unknown_missing_confidence()
 
             for action in action_violations:
                 if self._boxes_overlap(person_box, action["box"]):

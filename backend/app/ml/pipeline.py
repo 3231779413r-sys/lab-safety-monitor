@@ -601,22 +601,10 @@ class DetectionPipeline:
         frame_action_violations: List[Dict[str, Any]],
         timestamp: datetime,
     ) -> None:
-        camera_scope = {
-            normalize_violation_key(str(item))
-            for item in (self._camera_config.get("camera_detection_scope") or [])
-            if normalize_violation_key(str(item))
-        }
-        backend_scope = {
-            normalize_violation_key(str(item))
-            for item in (self._camera_config.get("backend_detection_scope") or [])
-            if normalize_violation_key(str(item))
-        }
+        camera_scope = self._normalize_event_scope(self._camera_config.get("camera_detection_scope") or [])
+        backend_scope = self._normalize_event_scope(self._camera_config.get("backend_detection_scope") or [])
         configured_scope = camera_scope.union(backend_scope)
-        other_scope = {
-            normalize_violation_key(str(item))
-            for item in (self._camera_config.get("other_person_scope") or [])
-            if normalize_violation_key(str(item))
-        }
+        other_scope = self._normalize_event_scope(self._camera_config.get("other_person_scope") or [])
         global_event_types: set[str] = set()
         if "area_overcapacity" in configured_scope:
             global_event_types.add("area_overcapacity")
@@ -631,7 +619,7 @@ class DetectionPipeline:
             return
 
         subject_type = str(person_result.get("subject_type") or "unknown")
-        identity_scope = set(person_result.get("subject_supervision_scope") or [])
+        identity_scope = self._normalize_event_scope(person_result.get("subject_supervision_scope") or [])
         allowed_camera_ids = set(person_result.get("allowed_camera_ids") or [])
         camera_id = self._camera_config.get("camera_id")
         forced_event_types: set[str] = set()
@@ -713,6 +701,17 @@ class DetectionPipeline:
         person_result["action_violations"] = filtered_action_violations
         person_result["detection_confidence"] = filtered_confidence
         person_result["is_violation"] = bool(filtered_missing_ppe or filtered_action_violations)
+
+    @staticmethod
+    def _normalize_event_scope(values: List[Any]) -> set[str]:
+        normalized_values: set[str] = set()
+        for item in values or []:
+            normalized = normalize_violation_key(str(item))
+            if not normalized:
+                continue
+            matched_types = match_danger_event_types([normalized])
+            normalized_values.add(matched_types[0] if matched_types else normalized)
+        return normalized_values
 
     def _apply_workshop_overcapacity(
         self,

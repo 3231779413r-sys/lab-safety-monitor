@@ -1124,7 +1124,16 @@ class CameraRuntime:
                 telemetry, "capture_sampled_at", "inference_publish_enqueued_at"
             ),
             "capture_read_ms": telemetry.get("capture_read_ms") if telemetry else None,
+            "capture_resize_ms": telemetry.get("capture_resize_ms") if telemetry else None,
+            "capture_raw_encode_ms": telemetry.get("capture_raw_encode_ms") if telemetry else None,
+            "capture_cache_update_ms": telemetry.get("capture_cache_update_ms") if telemetry else None,
             "capture_frame_gap_ms": telemetry.get("capture_frame_gap_ms") if telemetry else None,
+            "transport_inline_encode_ms": telemetry.get("transport_inline_encode_ms") if telemetry else None,
+            "shared_frame_write_ms": telemetry.get("shared_frame_write_ms") if telemetry else None,
+            "transport_prepare_wall_ms": telemetry.get("transport_prepare_wall_ms") if telemetry else None,
+            "inference_submit_queue_wait_ms": telemetry_duration_ms(
+                telemetry, "inference_submit_queued_at", "inference_dispatch_started_at"
+            ),
             "inference_broker_wait_ms": telemetry_duration_ms(
                 telemetry, "inference_publish_enqueued_at", "inference_publish_started_at"
             ),
@@ -1138,6 +1147,12 @@ class CameraRuntime:
             "inference_batch_collect_ms": telemetry.get("inference_batch_collect_ms") if telemetry else None,
             "inference_compute_ms": telemetry_duration_ms(
                 telemetry, "inference_batch_started_at", "inference_batch_finished_at"
+            ),
+            "inference_result_publish_ms": telemetry_duration_ms(
+                telemetry, "inference_batch_finished_at", "inference_result_published_at"
+            ),
+            "inference_result_broker_to_runtime_ms": telemetry_duration_ms(
+                telemetry, "inference_result_broker_received_at", "inference_result_received_at"
             ),
             "inference_total_ms": telemetry_duration_ms(
                 telemetry, "capture_sampled_at", "inference_result_received_at"
@@ -1161,6 +1176,12 @@ class CameraRuntime:
             "identity_enqueue_wait_ms": telemetry_duration_ms(
                 telemetry, "inference_result_received_at", "identity_publish_enqueued_at"
             ),
+            "identity_submit_queue_wait_ms": telemetry_duration_ms(
+                telemetry, "identity_submit_queued_at", "identity_dispatch_started_at"
+            ),
+            "identity_payload_prepare_ms": telemetry.get("identity_payload_prepare_ms") if telemetry else None,
+            "identity_frame_encode_ms": telemetry.get("identity_frame_encode_ms") if telemetry else None,
+            "identity_crop_encode_ms": telemetry.get("identity_crop_encode_ms") if telemetry else None,
             "identity_broker_wait_ms": telemetry_duration_ms(
                 telemetry, "identity_publish_enqueued_at", "identity_publish_started_at"
             ),
@@ -1174,6 +1195,16 @@ class CameraRuntime:
             "identity_compute_ms": telemetry_duration_ms(
                 telemetry, "identity_batch_started_at", "identity_batch_finished_at"
             ),
+            "identity_result_publish_ms": telemetry_duration_ms(
+                telemetry, "identity_batch_finished_at", "identity_result_published_at"
+            ),
+            "identity_result_broker_to_runtime_ms": telemetry_duration_ms(
+                telemetry, "identity_result_broker_received_at", "identity_result_received_at"
+            ),
+            "identity_face_detect_ms": telemetry.get("identity_face_detect_ms") if telemetry else None,
+            "identity_reid_extract_ms": telemetry.get("identity_reid_extract_ms") if telemetry else None,
+            "identity_face_match_ms": telemetry.get("identity_face_match_ms") if telemetry else None,
+            "identity_payload_build_ms": telemetry.get("identity_payload_build_ms") if telemetry else None,
             "identity_total_ms": telemetry_duration_ms(
                 telemetry, "inference_result_received_at", "identity_result_received_at"
             ),
@@ -1183,6 +1214,10 @@ class CameraRuntime:
             "processing_queue_wait_ms": telemetry_duration_ms(
                 telemetry, "processing_enqueued_at", "processing_started_at"
             ),
+            "pipeline_process_ms": telemetry.get("pipeline_process_ms") if telemetry else None,
+            "workshop_overcapacity_sync_ms": telemetry.get("workshop_overcapacity_sync_ms") if telemetry else None,
+            "annotated_preview_jpeg_ms": telemetry.get("annotated_preview_jpeg_ms") if telemetry else None,
+            "state_update_ms": telemetry.get("state_update_ms") if telemetry else None,
             "processing_ms": telemetry_duration_ms(
                 telemetry, "processing_started_at", "processing_finished_at"
             ),
@@ -1195,6 +1230,9 @@ class CameraRuntime:
             "preview_people_write_ms": telemetry.get("preview_people_write_ms") if telemetry else None,
             "preview_status_write_ms": telemetry.get("preview_status_write_ms") if telemetry else None,
             "preview_publish_store_ms": telemetry.get("preview_publish_store_ms") if telemetry else None,
+            "end_to_preview_ms": telemetry_duration_ms(
+                telemetry, "capture_sampled_at", "preview_snapshot_published_at"
+            ),
             "preview_total_ms": telemetry_duration_ms(
                 telemetry, "capture_sampled_at", "preview_snapshot_published_at"
             ),
@@ -1231,6 +1269,71 @@ class CameraRuntime:
         logger.info(
             "FRAME_TIMING %s",
             json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+        )
+        ordered_step_keys = [
+            "capture_read_ms",
+            "capture_resize_ms",
+            "capture_raw_encode_ms",
+            "capture_cache_update_ms",
+            "transport_inline_encode_ms",
+            "shared_frame_write_ms",
+            "transport_prepare_wall_ms",
+            "inference_submit_queue_wait_ms",
+            "inference_broker_wait_ms",
+            "inference_worker_wait_ms",
+            "inference_batch_wait_ms",
+            "person_detect_ms",
+            "ppe_detect_ms",
+            "pose_detect_ms",
+            "postprocess_ms",
+            "inference_compute_ms",
+            "inference_result_publish_ms",
+            "inference_result_broker_to_runtime_ms",
+            "identity_enqueue_wait_ms",
+            "identity_payload_prepare_ms",
+            "identity_crop_encode_ms",
+            "identity_frame_encode_ms",
+            "identity_submit_queue_wait_ms",
+            "identity_broker_wait_ms",
+            "identity_worker_wait_ms",
+            "identity_batch_wait_ms",
+            "identity_face_detect_ms",
+            "identity_reid_extract_ms",
+            "identity_face_match_ms",
+            "identity_payload_build_ms",
+            "identity_compute_ms",
+            "identity_result_publish_ms",
+            "identity_result_broker_to_runtime_ms",
+            "processing_queue_wait_ms",
+            "pipeline_process_ms",
+            "workshop_overcapacity_sync_ms",
+            "annotated_preview_jpeg_ms",
+            "state_update_ms",
+            "processing_ms",
+            "preview_publish_queue_wait_ms",
+            "preview_raw_encode_ms",
+            "preview_raw_write_ms",
+            "preview_annotated_write_ms",
+            "preview_people_write_ms",
+            "preview_status_write_ms",
+            "preview_publish_store_ms",
+            "persist_ms",
+        ]
+        step_parts = [
+            f"{key}={payload[key]}ms"
+            for key in ordered_step_keys
+            if payload.get(key) is not None
+        ]
+        logger.info(
+            "FRAME_TIMING_STEPS camera=%s request=%s stage=%s end_to_preview_ms=%s inference_total_ms=%s identity_total_ms=%s persist_total_ms=%s steps=%s",
+            payload.get("camera_id"),
+            payload.get("request_id"),
+            payload.get("stage"),
+            payload.get("end_to_preview_ms"),
+            payload.get("inference_total_ms"),
+            payload.get("identity_total_ms"),
+            payload.get("persist_total_ms"),
+            " -> ".join(step_parts) if step_parts else "n/a",
         )
 
     def _mark_frame_deleted(
@@ -1331,7 +1434,7 @@ class CameraRuntime:
                 {
                     "preview_raw_encode_ms": preview_metrics.get("raw_encode_ms"),
                     "preview_raw_write_ms": preview_metrics.get("raw_write_ms"),
-                    "preview_annotated_write_ms": 0.0,
+                    "preview_annotated_write_ms": preview_metrics.get("annotated_write_ms"),
                     "preview_people_write_ms": preview_metrics.get("people_write_ms"),
                     "preview_status_write_ms": preview_metrics.get("status_write_ms"),
                     "preview_publish_store_ms": preview_metrics.get("publish_snapshot_ms"),
@@ -1408,7 +1511,9 @@ class CameraRuntime:
                 continue
             no_frame_started_at = None
 
+            resize_started_at = time.perf_counter()
             frame = self._resize_frame(frame)
+            resize_ms = round((time.perf_counter() - resize_started_at) * 1000.0, 1)
             now = datetime.now()
             frame_gap_ms = (
                 round((now - last_successful_frame_at).total_seconds() * 1000.0, 1)
@@ -1418,12 +1523,16 @@ class CameraRuntime:
             last_successful_frame_at = now
             monotonic_now = time.monotonic()
             raw_jpeg = None
+            raw_encode_ms = 0.0
             if monotonic_now >= next_display_encode_at:
+                raw_encode_started_at = time.perf_counter()
                 raw_jpeg = self._encode_frame_jpeg(frame)
+                raw_encode_ms = round((time.perf_counter() - raw_encode_started_at) * 1000.0, 1)
                 next_display_encode_at = max(
                     next_display_encode_at + display_interval_seconds,
                     monotonic_now + display_interval_seconds * 0.5,
                 )
+            cache_update_started_at = time.perf_counter()
             with self._lock:
                 self._latest_frame = frame
                 self._latest_frame_version += 1
@@ -1441,6 +1550,7 @@ class CameraRuntime:
                         next_event_buffer_at + event_buffer_interval_seconds,
                         monotonic_now + event_buffer_interval_seconds * 0.5,
                     )
+            cache_update_ms = round((time.perf_counter() - cache_update_started_at) * 1000.0, 1)
 
             if monotonic_now >= next_process_at:
                 self._refresh_runtime_camera_config()
@@ -1451,6 +1561,9 @@ class CameraRuntime:
                     "capture_sampled_at": telemetry_now(at=now),
                     "frame_request_id": "",
                     "capture_read_ms": read_ms,
+                    "capture_resize_ms": resize_ms,
+                    "capture_raw_encode_ms": raw_encode_ms,
+                    "capture_cache_update_ms": cache_update_ms,
                     "capture_frame_gap_ms": frame_gap_ms,
                     "capture_poll_fps": capture_poll_fps,
                     "capture_process_fps": process_fps,
@@ -1493,12 +1606,17 @@ class CameraRuntime:
         telemetry: TelemetryMap | None,
     ) -> None:
         processing_telemetry = mark_telemetry(telemetry, "processing_started_at")
+        pipeline_started_at = time.perf_counter()
         result = self.pipeline.process_frame(
             frame,
             video_source=video_source,
             detections_override=detections_override,
             identity_observations_override=identity_observations_override,
             annotate=False,
+        )
+        processing_telemetry["pipeline_process_ms"] = round(
+            (time.perf_counter() - pipeline_started_at) * 1000.0,
+            1,
         )
         result["video_source"] = video_source
         result["alert_cooldown_seconds"] = int(
@@ -1507,7 +1625,12 @@ class CameraRuntime:
                 settings.VIOLATION_ALERT_COOLDOWN_SECONDS,
             )
         )
+        workshop_sync_started_at = time.perf_counter()
         self._sync_global_workshop_overcapacity(frame, result)
+        processing_telemetry["workshop_overcapacity_sync_ms"] = round(
+            (time.perf_counter() - workshop_sync_started_at) * 1000.0,
+            1,
+        )
         person_count = len(result.get("persons") or [])
         ppe_detection_count = self._count_ppe_detections(result.get("ppe_detections"))
         selected_for_identity = int((processing_telemetry or {}).get("identity_selected_persons") or 0)
@@ -1515,10 +1638,7 @@ class CameraRuntime:
             person_count=person_count,
             ppe_detection_count=ppe_detection_count,
         )
-        result_telemetry = mark_telemetry(
-            processing_telemetry,
-            "processing_finished_at",
-        )
+        result_telemetry = clone_telemetry(processing_telemetry)
         result_telemetry.update(
             {
                 "person_count": person_count,
@@ -1526,21 +1646,34 @@ class CameraRuntime:
                 "frame_complexity_score": frame_complexity_score,
             }
         )
+        annotated_started_at = time.perf_counter()
         annotated_jpeg = self._build_annotated_preview_jpeg(frame, result)
+        result_telemetry["annotated_preview_jpeg_ms"] = round(
+            (time.perf_counter() - annotated_started_at) * 1000.0,
+            1,
+        )
         if frame_path:
             result_telemetry = self._delete_shared_frame(
                 frame_path,
                 reason="processing_complete",
                 telemetry=result_telemetry,
             )
+        state_update_started_at = time.perf_counter()
         with self._lock:
             self._latest_detection_result = result
             self._latest_annotated_jpeg = annotated_jpeg
             self._latest_result_request_id = request_id
-            self._latest_result_telemetry = clone_telemetry(result_telemetry)
             self._latest_preview_logged_request_id = None
             self.status.processed_frames += 1
             self.status.last_frame_at = processed_at
+        result_telemetry["state_update_ms"] = round(
+            (time.perf_counter() - state_update_started_at) * 1000.0,
+            1,
+        )
+        result_telemetry = mark_telemetry(result_telemetry, "processing_finished_at")
+        with self._lock:
+            if self._latest_result_request_id == request_id:
+                self._latest_result_telemetry = clone_telemetry(result_telemetry)
         self._mark_processed_frame_state(result_telemetry)
         self._record_runtime_metrics(
             telemetry=result_telemetry,
@@ -1696,24 +1829,55 @@ class CameraRuntime:
         request_id = str(uuid4())
         request_telemetry = clone_telemetry(telemetry)
         request_telemetry["frame_request_id"] = request_id
-        frame_jpeg = self._encode_transport_jpeg(
-            frame,
-            quality=max(35, min(90, int(getattr(settings, "INFERENCE_FRAME_JPEG_QUALITY", 80)))),
-        )
-        frame_path: str | None = None
-        try:
-            frame_path = self._shared_frame_store.write_frame(
+        transport_prepare_started_at = time.perf_counter()
+        transport_quality = max(35, min(90, int(getattr(settings, "INFERENCE_FRAME_JPEG_QUALITY", 80))))
+
+        def _encode_inline_jpeg() -> tuple[Optional[bytes], float]:
+            encode_started_at = time.perf_counter()
+            encoded = self._encode_transport_jpeg(frame, quality=transport_quality)
+            return encoded, round((time.perf_counter() - encode_started_at) * 1000.0, 1)
+
+        def _write_shared_frame() -> tuple[str | None, float]:
+            shared_write_started_at = time.perf_counter()
+            written_path = self._shared_frame_store.write_frame(
                 camera_id=self.camera_id,
                 request_id=request_id,
                 frame=frame,
                 consumers_pending=["inference"],
             )
+            return written_path, round((time.perf_counter() - shared_write_started_at) * 1000.0, 1)
+
+        encode_future = _runtime_background_executor.submit(_encode_inline_jpeg)
+        write_future = _runtime_background_executor.submit(_write_shared_frame)
+        try:
+            frame_jpeg, transport_inline_encode_ms = encode_future.result()
+        except Exception:
+            logger.exception(
+                "Failed to encode inline inference JPEG for camera %s request_id=%s",
+                self.camera_id,
+                request_id,
+            )
+            frame_jpeg = None
+            transport_inline_encode_ms = round(
+                (time.perf_counter() - transport_prepare_started_at) * 1000.0,
+                1,
+            )
+        request_telemetry["transport_inline_encode_ms"] = transport_inline_encode_ms
+        frame_path: str | None = None
+        try:
+            frame_path, shared_frame_write_ms = write_future.result()
         except Exception:
             logger.exception(
                 "Failed to write shared frame for camera %s request_id=%s; continue with inline frame payload",
                 self.camera_id,
                 request_id,
             )
+            shared_frame_write_ms = round((time.perf_counter() - transport_prepare_started_at) * 1000.0, 1)
+        request_telemetry["shared_frame_write_ms"] = shared_frame_write_ms
+        request_telemetry["transport_prepare_wall_ms"] = round(
+            (time.perf_counter() - transport_prepare_started_at) * 1000.0,
+            1,
+        )
         request_telemetry["shared_frame_path"] = frame_path
         request_telemetry["frame_transport_mode"] = (
             "shared_frame+inline_jpeg"
@@ -1752,6 +1916,7 @@ class CameraRuntime:
             submitted_at=submitted_at,
             telemetry=request_telemetry,
         )
+        task.telemetry = mark_telemetry(task.telemetry, "inference_submit_queued_at")
         enqueue_result = self._registry.enqueue_inference_submit(self.camera_id, task)
         if enqueue_result.replaced_task is not None:
             self._replaced_pending_latest_count += 1
@@ -1769,12 +1934,18 @@ class CameraRuntime:
             )
         if not enqueue_result.accepted:
             self._submit_queue_reject_count += 1
+            released_telemetry = request_telemetry
             if frame_path:
-                self._release_inference_frame(
+                released_telemetry = self._release_inference_frame(
                     frame_path,
                     reason=enqueue_result.error_reason or "submit_queue_full",
                     telemetry=request_telemetry,
                 )
+            self._log_frame_timing(
+                stage=enqueue_result.error_reason or "submit_queue_full",
+                request_id=request_id,
+                telemetry=released_telemetry,
+            )
             logger.debug(
                 "Skipping inference submit task for camera %s because shared submit queue is full",
                 self.camera_id,
@@ -1807,7 +1978,7 @@ class CameraRuntime:
             )
             return
 
-        request_telemetry = clone_telemetry(task.telemetry)
+        request_telemetry = mark_telemetry(task.telemetry, "inference_dispatch_started_at")
         request_telemetry["frame_request_id"] = task.request_id
         published = self._registry.publish_inference_frame(
             request_id=task.request_id,
@@ -1978,10 +2149,16 @@ class CameraRuntime:
             telemetry=inference_telemetry,
         )
 
-        prepared_identity_persons, all_have_crops = self._prepare_identity_person_payloads(
+        identity_payload_prepare_started_at = time.perf_counter()
+        prepared_identity_persons, all_have_crops, identity_crop_encode_ms = self._prepare_identity_person_payloads(
             pending.frame,
             identity_persons,
         )
+        inference_telemetry["identity_payload_prepare_ms"] = round(
+            (time.perf_counter() - identity_payload_prepare_started_at) * 1000.0,
+            1,
+        )
+        inference_telemetry["identity_crop_encode_ms"] = identity_crop_encode_ms
 
         try:
             face_detection_requested = self.pipeline._should_run_face_detection(identity_persons)
@@ -2006,11 +2183,18 @@ class CameraRuntime:
 
         identity_frame_jpeg = None
         if not all_have_crops:
+            identity_frame_encode_started_at = time.perf_counter()
             identity_frame_jpeg = (
                 self._encode_transport_jpeg(frame=pending.frame, quality=60)
                 if pending.frame is not None
                 else None
             )
+            inference_telemetry["identity_frame_encode_ms"] = round(
+                (time.perf_counter() - identity_frame_encode_started_at) * 1000.0,
+                1,
+            )
+        else:
+            inference_telemetry["identity_frame_encode_ms"] = 0.0
         if not all_have_crops and identity_frame_jpeg is None:
             self._identity_requests_skipped += 1
             self._record_identity_fallback()
@@ -2169,6 +2353,7 @@ class CameraRuntime:
             face_detection_requested=face_detection_requested,
             telemetry=clone_telemetry(telemetry),
         )
+        task.telemetry = mark_telemetry(task.telemetry, "identity_submit_queued_at")
         enqueue_result = self._registry.enqueue_identity_submit(self.camera_id, task)
         if enqueue_result.replaced_task is not None:
             self._replaced_pending_latest_count += 1
@@ -2230,7 +2415,7 @@ class CameraRuntime:
             )
 
         persons = list(task.identity_persons or task.detections_override.get("persons") or [])
-        request_telemetry = clone_telemetry(task.telemetry)
+        request_telemetry = mark_telemetry(task.telemetry, "identity_dispatch_started_at")
         request_telemetry["frame_request_id"] = request_telemetry.get("frame_request_id") or task.request_id
         published = self._registry.publish_identity_frame(
             request_id=task.request_id,
@@ -2773,25 +2958,49 @@ class CameraRuntime:
         self,
         frame: np.ndarray | None,
         persons: list[dict[str, Any]],
-    ) -> tuple[list[dict[str, Any]], bool]:
+    ) -> tuple[list[dict[str, Any]], bool, float]:
         use_crops_first = bool(getattr(settings, "IDENTITY_USE_PERSON_CROPS_FIRST", True))
         max_crops = max(1, int(getattr(settings, "IDENTITY_MAX_CROPS_PER_FRAME", 2)))
         prepared: list[dict[str, Any]] = []
         all_have_crops = True
+        crop_encode_ms = 0.0
+        crop_futures: list[tuple[int, Future[bytes | None]]] = []
         for index, person in enumerate(persons):
             item = dict(person)
-            crop_jpeg = None
-            if use_crops_first and index < max_crops:
-                crop_jpeg = self._encode_person_crop_jpeg(frame, item)
-            item["crop_jpeg"] = crop_jpeg
+            item["crop_jpeg"] = None
             item["raw_track_id"] = item.get("raw_track_id", item.get("detector_track_id", item.get("track_id")))
             item["crop_score"] = float(item.get("score", item.get("confidence", 0.0)) or 0.0)
             prepared.append(item)
-            if use_crops_first and crop_jpeg is None:
-                all_have_crops = False
+            if use_crops_first and index < max_crops:
+                crop_futures.append(
+                    (
+                        index,
+                        _runtime_background_executor.submit(
+                            self._encode_person_crop_jpeg,
+                            frame,
+                            item,
+                        ),
+                    )
+                )
+        if crop_futures:
+            crop_encode_started_at = time.perf_counter()
+            for index, future in crop_futures:
+                try:
+                    crop_jpeg = future.result()
+                except Exception:
+                    logger.exception(
+                        "Failed to encode identity crop camera=%s index=%s",
+                        self.camera_id,
+                        index,
+                    )
+                    crop_jpeg = None
+                prepared[index]["crop_jpeg"] = crop_jpeg
+                if crop_jpeg is None:
+                    all_have_crops = False
+            crop_encode_ms = (time.perf_counter() - crop_encode_started_at) * 1000.0
         if not use_crops_first:
             all_have_crops = False
-        return prepared, all_have_crops
+        return prepared, all_have_crops, round(crop_encode_ms, 1)
 
     def _schedule_persist(
         self,

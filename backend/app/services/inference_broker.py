@@ -199,7 +199,10 @@ class InferenceBroker:
             camera_id = str(payload.get("camera_id") or "")
             request_id = str(payload.get("request_id") or "")
             detections = payload.get("detections") or {}
-            telemetry = clone_telemetry(payload.get("telemetry"))
+            telemetry = mark_telemetry(
+                clone_telemetry(payload.get("telemetry")),
+                "inference_result_broker_received_at",
+            )
             if not camera_id or not request_id:
                 logger.warning("Ignoring malformed inference result payload: %s", payload)
                 return

@@ -45,6 +45,8 @@ class TemporalFilter:
         fusion_strategy: str = "ema",
         ema_alpha: float = 0.7,
         confidence_threshold: float = 0.4,
+        strict_consecutive_ppe: Optional[Set[str]] = None,
+        per_ppe_min_frames: Optional[Dict[str, int]] = None,
     ):
         """
         Args:
@@ -61,6 +63,11 @@ class TemporalFilter:
         self.fusion_strategy = fusion_strategy
         self.ema_alpha = ema_alpha
         self.confidence_threshold = confidence_threshold
+        self.strict_consecutive_ppe = set(strict_consecutive_ppe or [])
+        self.per_ppe_min_frames = {
+            str(key): max(1, int(value))
+            for key, value in (per_ppe_min_frames or {}).items()
+        }
 
         # Track violations per person: person_id -> deque of missing_ppe sets
         self.violation_history: Dict[str, deque] = defaultdict(
@@ -101,11 +108,19 @@ class TemporalFilter:
         self.violation_history[person_id].append(missing_set)
         history = self.violation_history[person_id]
 
+        history_list = list(history)
+        candidate_ppe = set().union(*history_list) if history_list else set()
+        min_required = (
+            min(self._min_frames_for_ppe(ppe_name) for ppe_name in candidate_ppe)
+            if candidate_ppe
+            else self.min_frames
+        )
+
         # Need enough history
-        if len(history) < self.min_frames:
+        if len(history) < min_required:
             logger.debug(
                 f"Temporal filter: insufficient history for {person_id} "
-                f"({len(history)} < {self.min_frames} frames)"
+                f"({len(history)} < {min_required} frames)"
             )
             return {
                 "is_violation": False,
@@ -113,8 +128,16 @@ class TemporalFilter:
                 "violation_duration": 0,
             }
 
-        # Find PPE that's been missing in all recent frames
-        stable_missing = set.intersection(*list(history))
+        # Find PPE that's been missing in all required recent frames
+        stable_missing = {
+            ppe_name
+            for ppe_name in candidate_ppe
+            if len(history_list) >= self._min_frames_for_ppe(ppe_name)
+            and all(
+                ppe_name in frame_missing
+                for frame_missing in history_list[-self._min_frames_for_ppe(ppe_name) :]
+            )
+        }
 
         now = datetime.now()
 
@@ -192,11 +215,24 @@ class TemporalFilter:
         self.confidence_history[person_id].append(detection_confidence)
         history = self.confidence_history[person_id]
 
+        history_list = list(history)
+        candidate_ppe = {
+            key[3:]
+            for frame_conf in history_list
+            for key in frame_conf
+            if key.startswith("no_")
+        }
+        min_required = (
+            min(self._min_frames_for_ppe(ppe_name) for ppe_name in candidate_ppe)
+            if candidate_ppe
+            else self.min_frames
+        )
+
         # Need enough history for fusion
-        if len(history) < self.min_frames:
+        if len(history) < min_required:
             logger.debug(
                 f"Temporal filter: insufficient confidence history for {person_id} "
-                f"({len(history)} < {self.min_frames} frames)"
+                f"({len(history)} < {min_required} frames)"
             )
             return {
                 "is_violation": False,
@@ -205,17 +241,38 @@ class TemporalFilter:
                 "violation_duration": 0,
             }
 
-        # Compute fused confidence for each PPE type
-        fused = self._compute_fused_confidence(list(history))
+        # Compute fused confidence for each PPE type using its configured window.
+        all_keys: Set[str] = set()
+        for frame_conf in history_list:
+            all_keys.update(frame_conf.keys())
+
+        fused: Dict[str, float] = {}
+        for key in all_keys:
+            ppe_name = key[3:] if key.startswith("no_") else key
+            required_frames = self._min_frames_for_ppe(ppe_name)
+            recent_history = history_list[-required_frames:]
+            fused[key] = self._compute_fused_confidence(recent_history).get(key, 0.0)
         self.fused_confidence[person_id] = fused
 
         # Extract missing PPE based on fused confidence
         # Keys starting with "no_" indicate violations
         stable_missing = []
         for key, conf in fused.items():
-            if key.startswith("no_") and conf >= self.confidence_threshold:
-                # Extract PPE name from "no_<ppe_type>" format
-                ppe_name = key[3:]  # Remove "no_" prefix
+            if not key.startswith("no_"):
+                continue
+            # Extract PPE name from "no_<ppe_type>" format
+            ppe_name = key[3:]  # Remove "no_" prefix
+            required_frames = self._min_frames_for_ppe(ppe_name)
+            if len(history_list) < required_frames:
+                continue
+            recent_history = history_list[-required_frames:]
+            if ppe_name in self.strict_consecutive_ppe:
+                if all(
+                    frame_conf.get(key, 0.0) >= self.confidence_threshold
+                    for frame_conf in recent_history
+                ):
+                    stable_missing.append(ppe_name)
+            elif conf >= self.confidence_threshold:
                 stable_missing.append(ppe_name)
 
         now = datetime.now()
@@ -250,7 +307,12 @@ class TemporalFilter:
             
             # Hysteresis: only clear violation after min_frames_clear without violation
             if person_id in self.active_violations:
-                if self.clear_counter[person_id] < self.min_frames_clear:
+                active_missing = self.active_violations[person_id].missing_ppe
+                hysteresis_missing = active_missing - self.strict_consecutive_ppe
+                if (
+                    hysteresis_missing
+                    and self.clear_counter[person_id] < self.min_frames_clear
+                ):
                     # Still in hysteresis period - maintain violation
                     logger.debug(
                         f"Temporal filter: confidence hysteresis for {person_id} "
@@ -258,7 +320,7 @@ class TemporalFilter:
                     )
                     return {
                         "is_violation": True,
-                        "stable_missing_ppe": list(self.active_violations[person_id].missing_ppe),
+                        "stable_missing_ppe": list(hysteresis_missing),
                         "fused_confidence": fused,
                         "violation_duration": self.active_violations[person_id].frame_count,
                     }
@@ -319,6 +381,9 @@ class TemporalFilter:
 
         return fused
 
+    def _min_frames_for_ppe(self, ppe_name: str) -> int:
+        return self.per_ppe_min_frames.get(str(ppe_name), self.min_frames)
+
     def get_active_violations(self) -> Dict[str, ViolationState]:
         """Get all currently active violations."""
         return dict(self.active_violations)
@@ -370,6 +435,12 @@ def get_temporal_filter() -> TemporalFilter:
             ema_alpha=getattr(settings, "TEMPORAL_EMA_ALPHA", 0.7),
             confidence_threshold=getattr(
                 settings, "TEMPORAL_CONFIDENCE_THRESHOLD", 0.4
+            ),
+            strict_consecutive_ppe=set(
+                getattr(settings, "PPE_STRICT_CONSECUTIVE_TYPES", [])
+            ),
+            per_ppe_min_frames=dict(
+                getattr(settings, "PPE_VIOLATION_MIN_FRAMES", {})
             ),
         )
     return _filter

@@ -94,6 +94,9 @@ class Settings(BaseSettings):
     # Detector settings
     DETECTOR_TYPE: str = Field(default="yolov11")
     DETECTION_CONFIDENCE_THRESHOLD: float = 0.5
+    POSITIVE_PPE_CONFIDENCE_THRESHOLDS: Dict[str, float] = Field(
+        default={"protective_clothing": 0.35}
+    )
     PERSON_MIN_BOX_AREA_RATIO: float = 0.14
     PERSON_MIN_BOX_AREA_FALLBACK_SCORE_THRESHOLD: float = 0.7
     PERSON_MIN_BOX_AREA_FALLBACK_MIN_ASPECT_RATIO: float = 1.3
@@ -162,10 +165,12 @@ class Settings(BaseSettings):
     TEMPORAL_EMA_ALPHA: float = Field(default=0.7)
     TEMPORAL_CONFIDENCE_THRESHOLD: float = Field(default=0.4)
     PPE_UNKNOWN_AS_MISSING_CONFIDENCE: float = Field(default=0.45)
-    PPE_UNKNOWN_AS_MISSING_TYPES: List[str] = Field(default=[])
-    PPE_STRICT_CONSECUTIVE_TYPES: List[str] = Field(default=["hardhat"])
+    PPE_UNKNOWN_AS_MISSING_TYPES: List[str] = Field(default=["protective_clothing"])
+    PPE_STRICT_CONSECUTIVE_TYPES: List[str] = Field(
+        default=["hardhat", "protective_clothing"]
+    )
     PPE_VIOLATION_MIN_FRAMES: Dict[str, int] = Field(
-        default={"hardhat": 5, "protective_clothing": 4}
+        default={"hardhat": 5, "protective_clothing": 5}
     )
 
     # Live stream settings

@@ -69,6 +69,12 @@ class YOLOv11Detector:
         self.class_names = dict(self.DEFAULT_CLASS_NAMES)
         self.device = "cuda" if self._check_cuda() else "cpu"
         self.confidence_threshold = settings.DETECTION_CONFIDENCE_THRESHOLD
+        self.positive_ppe_thresholds = {
+            str(key): float(value)
+            for key, value in getattr(
+                settings, "POSITIVE_PPE_CONFIDENCE_THRESHOLDS", {}
+            ).items()
+        }
         self.violation_threshold = getattr(
             settings, "VIOLATION_CONFIDENCE_THRESHOLD", 0.3
         )
@@ -221,7 +227,7 @@ class YOLOv11Detector:
         return self._detect_single_scale(frame, scale=1.0)
 
     def _detect_batch_pytorch(self, frames: List[np.ndarray]) -> List[Dict[str, Any]]:
-        min_threshold = min(self.confidence_threshold, self.violation_threshold)
+        min_threshold = self._model_confidence_floor()
         results = self.model(frames, conf=min_threshold, verbose=False, save=False)
         batch_results: List[Dict[str, Any]] = []
 
@@ -267,7 +273,7 @@ class YOLOv11Detector:
         else:
             scaled_frame = frame
 
-        min_threshold = min(self.confidence_threshold, self.violation_threshold)
+        min_threshold = self._model_confidence_floor()
         results = self.model(scaled_frame, conf=min_threshold, verbose=False, save=False)
 
         detections = []
@@ -380,7 +386,7 @@ class YOLOv11Detector:
         detections = []
         h, w = frame.shape[:2]
         scale_x, scale_y = w / img_size, h / img_size
-        min_threshold = min(self.confidence_threshold, self.violation_threshold)
+        min_threshold = self._model_confidence_floor()
 
         for detection in output:
             if len(detection) < 6:
@@ -431,7 +437,7 @@ class YOLOv11Detector:
 
             if normalized_label in self.POSITIVE_PPE_MAP:
                 ppe_type = self.POSITIVE_PPE_MAP[normalized_label]
-                if confidence >= self.confidence_threshold:
+                if confidence >= self._positive_ppe_threshold(ppe_type):
                     ppe_detections[ppe_type].append(
                         {
                             "box": box,
@@ -501,6 +507,14 @@ class YOLOv11Detector:
     @staticmethod
     def _unknown_missing_confidence() -> float:
         return float(getattr(settings, "PPE_UNKNOWN_AS_MISSING_CONFIDENCE", 0.45) or 0.45)
+
+    def _positive_ppe_threshold(self, ppe_type: str) -> float:
+        return self.positive_ppe_thresholds.get(str(ppe_type), self.confidence_threshold)
+
+    def _model_confidence_floor(self) -> float:
+        thresholds = [self.confidence_threshold, self.violation_threshold]
+        thresholds.extend(self.positive_ppe_thresholds.values())
+        return min(thresholds)
 
     def _create_person_boxes(self, boxes: List, frame_shape: tuple) -> List[Dict]:
         if not boxes:
